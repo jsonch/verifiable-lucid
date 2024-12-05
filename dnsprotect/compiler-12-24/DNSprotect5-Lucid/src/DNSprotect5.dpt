@@ -1,0 +1,162 @@
+include "ArrayHelpers.dpt"
+symbolic int<8> Q;
+symbolic int<8> QRoff;
+symbolic int<32> U;
+symbolic int<32> L;
+const int<32> A = 256;
+const int<32> I = 16;
+const int<32> T = 256;
+global Array.t<8> currentIntv = Array.create(A);
+global Array.t<32> count = Array.create(A);
+global BoolArray.t filtering = BoolArray.Create(A);
+global Array.t<8> timestampOn = Array.create(A);
+global BoolArray.t recircPending = BoolArray.Create(A);
+event ProcessPacket(int<8> addr, bool dnsRequest, int<7> pad_dnsRequest, int<8> uniqueSig);
+event SetFiltering(int<8> addr, bool toWhat, int<7> pad_toWhat);
+
+fun int<8> interval(int<8> timestamp) {
+  return (timestamp >> 4);
+}
+memop upperBoundedIncr(int<32> count, int<32> unused) {
+  if ((count < U)) {
+    return (count + 1);
+  } else {
+    return count;
+  }
+}
+memop newTime(int<8> memVal, int<8> timestamp) {
+  if (((timestamp - memVal) > Q)) {
+    return (timestamp - Q);
+  } else {
+    return memVal;
+  }
+}
+fun void filter(int<8> addr, int<8> timestamp, int<8> uniqueSig) {
+  bool var_out1 = false;
+  var_out1 = bloomFilterQuery(addr, uniqueSig);
+  return;
+}
+fun void processRequest(int<8> addr, int<8> timestamp, int<8> uniqueSig) {
+  bool var_2_tmpFiltering = false;
+  bool var_out2 = false;
+  var_out2 = BoolArray.Get(filtering, addr, true);
+  var_2_tmpFiltering = var_out2;
+  if (var_2_tmpFiltering) {
+    bloomFilterInsert(addr, uniqueSig);
+  } 
+  return;
+}
+fun void processReply(int<8> addr, int<8> timestamp, int<8> uniqueSig) {
+  skip;
+  int<32> var_3_oldCount = 0;
+  var_3_oldCount = 0;
+  int<8> var_4_tmpCurrentIntv = 0;
+  int<32> var_5_tmpCount = 0;
+  int<8> var_out3 = 0;
+  skip;
+  var_out3 = Array.update(currentIntv, addr, nocalc, 0, swapcalc, interval(timestamp));
+  var_4_tmpCurrentIntv = var_out3;
+  skip;
+  if ((!(interval(timestamp) == var_4_tmpCurrentIntv))) {
+    int<32> var_out5 = 0;
+    skip;
+    var_out5 = Array.update(count, addr, nocalc, 0, swapcalc, 1);
+    var_3_oldCount = var_out5;
+    skip;
+    var_5_tmpCount = 1;
+  } else {
+    int<32> var_out7 = 0;
+    skip;
+    var_out7 = Array.update(count, addr, upperBoundedIncr, 0, upperBoundedIncr, 0);
+    var_5_tmpCount = var_out7;
+    skip;
+  }
+  bool var_6_tmpFiltering = false;
+  bool var_out9 = false;
+  var_out9 = BoolArray.Get(filtering, addr, true);
+  var_6_tmpFiltering = var_out9;
+  int<8> var_7_tmpTimestampOn = 0;
+  if ((!var_6_tmpFiltering)) {
+    if ((var_5_tmpCount > U)) {
+      bool var_8_tmpRecircPending = false;
+      bool var_out10 = false;
+      skip;
+      var_out10 = BoolArray.GetSet(recircPending, addr, true, true);
+      var_8_tmpRecircPending = var_out10;
+      skip;
+      if ((!var_8_tmpRecircPending)) {
+        generate (SetFiltering(addr, true, 0));
+      } else {
+        skip;
+      }
+    } else {
+      skip;
+    }
+  } else {
+    if ((0 < var_3_oldCount)) {
+      if ((var_3_oldCount > L)) {
+        int<8> var_out12 = 0;
+        skip;
+        var_out12 = Array.update(timestampOn, addr, newTime, timestamp, newTime, timestamp);
+        var_7_tmpTimestampOn = var_out12;
+        skip;
+        skip;
+      } else {
+        int<8> var_out14 = 0;
+        var_out14 = Array.getm(timestampOn, addr, nocalc, 0);
+        var_7_tmpTimestampOn = var_out14;
+        if (((timestamp - var_7_tmpTimestampOn) > QRoff)) {
+          bool var_9_tmpRecircPending = false;
+          bool var_out15 = false;
+          skip;
+          var_out15 = BoolArray.GetSet(recircPending, addr, true, true);
+          var_9_tmpRecircPending = var_out15;
+          skip;
+          if ((!var_9_tmpRecircPending)) {
+            generate (SetFiltering(addr, false, 0));
+          } else {
+            skip;
+          }
+        } 
+        skip;
+      }
+    } else {
+      int<8> var_out17 = 0;
+      var_out17 = Array.getm(timestampOn, addr, nocalc, 0);
+      var_7_tmpTimestampOn = var_out17;
+      skip;
+    }
+  }
+  if ((var_6_tmpFiltering && ((timestamp - var_7_tmpTimestampOn) > Q))) {
+    filter(addr, timestamp, uniqueSig);
+  } 
+  return;
+}
+handle ProcessPacket(int<8> addr, bool dnsRequest, int<7> pad_dnsRequest, int<8> uniqueSig) {
+  int<8> timestamp = ((int<8>)Sys.time());
+  skip;
+  if (dnsRequest) {
+    processRequest(addr, timestamp, uniqueSig);
+    skip;
+  } else {
+    skip;
+    processReply(addr, timestamp, uniqueSig);
+    skip;
+  }
+  skip;
+}
+handle SetFiltering(int<8> addr, bool toWhat, int<7> pad_toWhat) {
+  int<8> timestamp = ((int<8>)Sys.time());
+  skip;
+  BoolArray.Set(filtering, addr, toWhat);
+  skip;
+  if (toWhat) {
+    skip;
+    Array.setm(timestampOn, addr, swapcalc, timestamp);
+    skip;
+  } 
+  skip;
+  BoolArray.Set(recircPending, addr, false);
+  skip;
+  skip;
+}
