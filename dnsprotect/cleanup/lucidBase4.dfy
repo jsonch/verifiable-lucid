@@ -22,6 +22,10 @@ Changes [5-12-2024]
 7. Make the filtering decision (line 310) depend on timestamp, not time.
 8. Make "time" a ghost parameter, since the implementation does not know 
    the true unbounded time.
+9. Put time and timestamp into a "Sys" object, so that the user code 
+   does not have to be aware about "TimedEvent"s.
+10.Add condition to stateInvariant so that it must hold on 0 args.
+11.Move queue and T into Sys.
 -------------------------------------------------------------------------*/
 
 
@@ -41,23 +45,25 @@ abstract module LucidBase {
 
    datatype GeneratedEvent = Event(event:Event, ports : set<uint8>)
 
-   class Program {
-      const T : nat := 256          // number must match limit on timestamp
-      var queue : seq <TimedEvent>
+   // system state that can be _read_ by the program, 
+   // but may not be _modified_ by the program, or 
+   // read by toplevel predicates. 
+   class Sys {
+      static const T : uint16 := 256          // number must match limit on timestamp
+      ghost var time : nat
       ghost var lastTime : nat
+      var timestamp : uint8
+      var queue : seq <TimedEvent>
 
-      var generatedEvents : set<GeneratedEvent>  // the event generated for recirc
-
-      var sys_time : uint8
-
-      ghost predicate parameterConstraints ()          // define in program
-         reads this
-
-      ghost predicate stateInvariant (time: nat, timestamp: uint8)
-         reads this                                    // define in program
- 
-      ghost predicate operatingAssumptions (e: TimedEvent)     
-         reads this                                    // define in program
+      constructor ()
+      ensures fresh(this)
+      ensures validQueue(queue)
+       {
+         time := 0;
+         lastTime := 0;
+         timestamp := 0;
+         queue := [];
+      }
 
       ghost predicate validQueue (q: seq <TimedEvent>)   // queue invariant
       // In a valid queue, times and timestamps match, and time is
@@ -70,12 +76,31 @@ abstract module LucidBase {
                      q[j].timestamp == q[j].time % T  )
             && (  forall j | 0 <= j < |q|-1 ::
                      q[j].time <= q[j+1].time  )      )  }
-      }
+      }      
+   }
+
+   class Program {
+      var sys : Sys
+
+      var generatedEvents : set<GeneratedEvent>  // the event generated for recirc
+
+      ghost predicate parameterConstraints ()          // define in program
+         reads {this} - {sys}
+      ghost predicate stateInvariant (time: nat, timestamp: uint8, lastTime:nat)
+         reads {this} - {sys}                                    // define in program
+
+      ghost predicate operatingAssumptions (event: Event, time : nat, timestamp: uint8, lastTime:nat)     
+         reads {this} - {sys}                                        // define in program
+
 
       constructor ()                                   // define in program
-         ensures validQueue (queue)
+         ensures sys.validQueue (sys.queue)
          // ensures parameterConstraints () // problem: how can the constructor ever ensure this?
-         ensures stateInvariant (0, 0)
+         ensures fresh(sys)
+         ensures fresh(this)
+         {
+            sys := new Sys();
+         }
 
       // method simulateArrival (q: seq <TimedEvent>)
       // // This method adds zero or more events to the queue.
@@ -86,70 +111,84 @@ abstract module LucidBase {
       //    ensures validQueue (queue)
 
       method pickNextEvent (q: seq <TimedEvent>)
-         modifies this
+         modifies this, this.sys, sys`lastTime
          requires generatedEvents == {}
-         requires validQueue (queue)
-         requires |queue| > 0
-         requires q == queue
+         requires sys.validQueue (sys.queue)
+         requires |sys.queue| > 0
+         requires q == sys.queue
          requires parameterConstraints ()
-         requires stateInvariant (q[0].time, q[0].timestamp)
-         requires operatingAssumptions (q[0])
-         ensures validQueue (queue)
-         ensures ( |queue| == |q| - 1 ) || ( |queue| == |q| )
-      {
+         requires stateInvariant (q[0].time, q[0].timestamp, sys.lastTime)
+         requires (sys.time == q[0].time && sys.timestamp == q[0].timestamp) <==> stateInvariant (q[0].time , q[0].timestamp, sys.lastTime)
+         requires operatingAssumptions (q[0].event, q[0].time, q[0].timestamp, sys.lastTime)
+         ensures sys.validQueue (sys.queue)
+         ensures ( |sys.queue| == |q| - 1 ) || ( |sys.queue| == |q| )
+      { 
+         assert stateInvariant (q[0].time, q[0].timestamp, sys.lastTime);
+         sys.time := q[0].time;
+         sys.timestamp := q[0].timestamp;
+         assert stateInvariant (sys.time, q[0].timestamp, sys.lastTime);
 
-         dispatch(q[0]);
+         // sys.timestamp := q[0].timestamp;         
+         dispatch(q[0].event);
+         sys.lastTime := 0;
          // if an event for recirculation was generated, add it to the queue
-         queue := q;
-         assert |queue| > 0;
+         sys.queue := q;
+         assert |sys.queue| > 0;
          while |generatedEvents| > 0
-            invariant |queue| > 0
-            invariant validQueue(queue)
+            modifies this`generatedEvents
+            modifies sys`queue
+            invariant |sys.queue| > 0
+            invariant sys.validQueue(sys.queue)
          {
-            assert |queue| > 0;
+            assert |sys.queue| > 0;
             var generatedEvent :| generatedEvent in generatedEvents;
             if (generatedEvent.ports == {}) { // recirc event, add to queue
                var recircEvent: TimedEvent := generateRecircEvent(generatedEvent.event);
-               queue := queue + [recircEvent];
+               sys.queue := sys.queue + [recircEvent];
             }
             generatedEvents := generatedEvents - {generatedEvent};
          }
-         queue := q[1..];
-         lastTime := q[0].time;
+         sys.queue := q[1..];
+         // lastTime := q[0].time; 
+         sys.lastTime := q[0].time;
       }
 
-      method dispatch (e: TimedEvent)
-         modifies this                                 // define in program
-         requires e.timestamp == e.time % T
+      method dispatch (e: Event)
+         modifies {this} - {this.sys}                                // define in program
+         requires sys.timestamp == sys.time % sys.T
          requires parameterConstraints ()
-         requires stateInvariant (e.time, e.timestamp)
-         requires operatingAssumptions (e)
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         requires operatingAssumptions (e, sys.time, sys.timestamp, sys.lastTime)
          requires generatedEvents == {}
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
+         ensures unchanged(this`sys)
 
       method generate(e : Event)            // generate recirculation event
          modifies this`generatedEvents
+         ensures unchanged(this`sys)
       {
          generatedEvents := generatedEvents + {Event(e, {})};
       }
       method generate_port(p : uint8, e : Event)  // generate output event
          modifies this`generatedEvents
+         ensures unchanged(this.sys)
+
       {
          generatedEvents := generatedEvents + {Event(e, {p})};
       }
 
       method generateRecircEvent (e: Event) returns 
                                                   (recircEvent: TimedEvent)
-         requires validQueue (queue)
-         requires |queue| > 0              // because method is called just
+         requires sys.validQueue (sys.queue)
+         requires |sys.queue| > 0              // because method is called just
                     // after dispatch, when dispatched event still in queue
-         ensures recircEvent.time > queue[|queue|-1].time
-         ensures recircEvent.timestamp == recircEvent.time % T
+         ensures recircEvent.time > sys.queue[|sys.queue|-1].time
+         ensures recircEvent.timestamp == recircEvent.time % sys.T
+         ensures unchanged(this`sys)
       {
          var recircTimestamp: uint8;
-         recircTimestamp := (queue[|queue|-1].timestamp + 1) % T;
+         recircTimestamp := (sys.queue[|sys.queue|-1].timestamp + 1) % sys.T;
          recircEvent := 
-                   TimedEvent(e, queue[|queue|-1].time+1, recircTimestamp);
+                   TimedEvent(e, sys.queue[|sys.queue|-1].time+1, recircTimestamp);
       }
    }
 }

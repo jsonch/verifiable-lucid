@@ -9,9 +9,27 @@ study.
 -------------------------------------------------------------------------*/
 
 
+
 include "lucidBase4.dfy"
 
-module LucidProg refines LucidBase {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+module LucidProg refines LucidBase { 
       import opened Memop
       
       type counter = uint32              // limit must exceed U
@@ -19,11 +37,11 @@ module LucidProg refines LucidBase {
       datatype Event =
       | ProcessPacket (dnsRequest: bool, uniqueSig: uint16)
       | SimulatedClockTick ()
-      | SimulatedHardwareFailure ()
+      | SimulatedHardwareFailure () 
       | SetFiltering (toWhat: bool)
       | Non ()
 
-   class Program ... {
+   class Program ... { 
 
       // Parameters
       const I : uint8 := 16           // interval length, < T and a power of 2
@@ -48,19 +66,16 @@ module LucidProg refines LucidBase {
          {  Roff > I > 0 && Q > 0 && 0 < U < L < 1048576  }
 
       constructor ()
-         ensures validQueue (queue)
          // ensures parameterConstraints ()
-         ensures stateInvariant (0, 0)
+         ensures stateInvariant (0, 0, 0) 
       {
-         queue := [];
-         lastTime := 0;
          filtering, recircPending := Atomic (false), Atomic (false);
          timeOn, actualTimeOn := 0, 0;
          currentIntv, timestampOn, count := Atomic(0), Atomic(0), Atomic(0);
          requestSet := {};
       }
 
-      ghost predicate protecting (time: nat) 
+      ghost predicate protecting (time: nat)  
          reads this
       {  filtering.val && (time - actualTimeOn) >= Q as nat  }
 
@@ -73,97 +88,98 @@ module LucidProg refines LucidBase {
          // Function satisfies specification because of mod arithmetic.
             ensures now >= origin ==> res == (now - origin)
             ensures now < origin ==>                        // 0 is T as uint8
-               res == (now + T - origin)
-      {  (now - origin) % T  }        // implemented as bit-vector subtraction
+               res == (now + sys.T - origin)
+      {  (now - origin) % sys.T  }        // implemented as bit-vector subtraction
 
-      ghost predicate stateInvariant (time: nat, timestamp: uint8)
-      {  (  timestampOn.val == timeOn % T  )
+      ghost predicate stateInvariant (time: nat, timestamp: uint8, lastTime : nat)  
+      {  (  timestampOn.val == timeOn % sys.T  )
       && (  actualTimeOn <= timeOn  )
       && (  timeOn <= time  )
       && (  (timeOn > actualTimeOn) ==> (time >= timeOn + Q as nat)  )
       && (  filtering.val ==> 
                (protecting (time) <==> protectImplmnt (timestamp)))
-      && (  ! filtering.val ==> requestSet == {}  )
-      }
+      && (  ! filtering.val ==> requestSet == {}  ) 
+      }  
 
-      ghost predicate operatingAssumptions (e: TimedEvent) 
+      ghost predicate operatingAssumptions (event: Event, time : nat, timestamp : uint8, lastTime:nat) 
       // There cannot be restrictions on recirculation events, i.e.,
       // SetFiltering events, because they were already chosen by the program.
       {
-         if      e.event.ProcessPacket?
-         then       (filtering.val ==> e.time < actualTimeOn + T) 
-               && (e.time - lastTime < T - I              ) 
-         else if e.event.SimulatedClockTick?
-         then    (filtering.val ==> (e.time + 1) < actualTimeOn + T) 
+         if      event.ProcessPacket?
+         then       (filtering.val ==> time < actualTimeOn + sys.T) 
+               && (time - lastTime < sys.T - I              ) 
+         else if event.SimulatedClockTick?
+         then    (filtering.val ==> (time + 1) < actualTimeOn + sys.T) 
          else true
       }
 
-      method dispatch (e: TimedEvent)
+      method dispatch (e : Event)
          {  
             if {
-               case e.event.ProcessPacket? => 
+               case e.ProcessPacket? => 
                {  processPacket 
-                     (e.time,e.timestamp, e.event.dnsRequest, e.event.uniqueSig);
+                     (e.dnsRequest, e.uniqueSig);
                }
-               case e.event.SetFiltering? => 
-                  setFiltering (e.time, e.timestamp, e.event.toWhat);
-               case e.event.SimulatedClockTick? => 
-                  simulatedClockTick (e.time, e.timestamp);
-               case e.event.SimulatedHardwareFailure? => 
-                  simulatedHardwareFailure (e.time, e.timestamp);
-               case e.event.Non? => 
+               case e.SetFiltering? => 
+                  setFiltering (e.toWhat);
+               case e.SimulatedClockTick? =>
+                  simulatedClockTick ();
+               case e.SimulatedHardwareFailure? => 
+                  simulatedHardwareFailure ();
+               case e.Non? => 
             }
          } 
 
-      method processPacket (ghost time: nat, timestamp: uint8, dnsRequest: bool, 
+      method processPacket (dnsRequest: bool, 
                                  uniqueSig: uint16)
-         modifies this
+         modifies {this} - {this.sys}
          requires generatedEvents == {}
-         requires timestamp == time % T
+         requires sys.timestamp == sys.time % sys.T
          requires parameterConstraints ()
-         requires stateInvariant (time, timestamp)
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          // There must be a packet between any two interval rollovers, so
          // that interval boundaries can be detected.  Unfortunately, the
          // specification is not strong enough to cause verification to fail
          // without this operating assumption.
-            requires time - lastTime < T - I
+            requires sys.time - sys.lastTime < sys.T - I
          // Below is the operating assumption to make attack time spans 
          // measurable.
-            requires filtering.val ==> time < actualTimeOn + T
+            requires filtering.val ==> sys.time < actualTimeOn + sys.T
          // The following is Adaptive Protection, can ONLY be verified when
          // the request set is implemented exactly.
          // Probabilistic Adaptive Protection means that Adaptive Protection
          // holds only in the likely cases where the positive from the Bloom
          // filter is true.
          ensures forwarded ==>                          // Adaptive Protection
-               (  dnsRequest || ! protecting (time)   
+               (  dnsRequest || ! protecting (sys.time)   
                || uniqueSig in preRequestSet       )
          ensures ! forwarded ==>
-               (  ! dnsRequest && protecting (time)
+               (  ! dnsRequest && protecting (sys.time)
                && ! (uniqueSig in preRequestSet)   )         // Harmlessness
-         ensures stateInvariant (time, timestamp)
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
+         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures unchanged(this`sys)
+
       {
          if dnsRequest {  
-            processRequest (time, timestamp, uniqueSig);
+            processRequest (uniqueSig);
             generate_port(1, ProcessPacket(true, uniqueSig));
          }
-         else {  
-            var allowPacket := processReply (time, timestamp, uniqueSig); 
+         else {   
+            var allowPacket := processReply (uniqueSig);
             if (allowPacket) {  
                generate_port(1, ProcessPacket(false, uniqueSig));
             }
          }   
       }
 
-      method processRequest (ghost time: nat, timestamp: uint8, uniqueSig: uint16)
+      method processRequest (uniqueSig: uint16)
          modifies this
-         requires timestamp == time % T
+         requires sys.timestamp == sys.time % sys.T
          requires parameterConstraints ()
-         requires stateInvariant (time, timestamp)
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures forwarded
-         ensures stateInvariant (time, timestamp)
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
+         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures unchanged(this`sys)
       {
          var tmpFiltering : bool := Get (filtering, nocalc, true);
          if tmpFiltering {
@@ -184,7 +200,7 @@ module LucidProg refines LucidBase {
 
       function newTime (memVal: uint8, timestamp: uint8): uint8
       // this is a custom memcalc
-      {  if (timestamp - memVal) % T >= Q then (timestamp - Q) % T
+      {  if (timestamp - memVal) % Sys.T >= Q then (timestamp - Q) % Sys.T
          else memVal
       }
 
@@ -192,28 +208,28 @@ module LucidProg refines LucidBase {
          reads this
       {  time - (timeOn + Q)  }
 
-      method processReply (ghost time: nat, timestamp: uint8, uniqueSig: uint16) 
+      method processReply (uniqueSig: uint16)  
          returns (allowPacket : bool)
          modifies this
          requires generatedEvents == {}
-         requires timestamp == time % T
+         requires sys.timestamp == sys.time % sys.T
          // There must be a packet between any two interval rollovers, so
          // that interval boundaries can be detected.  Unfortunately, the
          // specification is not strong enough to cause verification to fail
          // without this operating assumption.
-            requires time - lastTime < T - I
+            requires sys.time - sys.lastTime < sys.T - I
          // Operating assumption to make attack time spans measurable.
-            requires filtering.val ==> time < actualTimeOn + T
+            requires filtering.val ==> sys.time < actualTimeOn + sys.T
          requires parameterConstraints ()
-         requires stateInvariant (time, timestamp)     
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)     
          // Adaptive Protection, requires exact request set
             ensures forwarded ==>                 
-               (  ! protecting (time) || uniqueSig in preRequestSet )
+               (  ! protecting (sys.time) || uniqueSig in preRequestSet )
          ensures ! forwarded ==>                               // Harmlessness
-               (  protecting (time) && ! (uniqueSig in preRequestSet) ) 
-         ensures stateInvariant (time, timestamp)
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
-      {
+               (  protecting (sys.time) && ! (uniqueSig in preRequestSet) ) 
+         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures unchanged(this`sys)
+      { 
 
          preRequestSet := requestSet;                          // ghost update
       // Changes to measurement state:
@@ -227,8 +243,8 @@ module LucidProg refines LucidBase {
          var tmpCurrentIntv : uint8;
          var tmpCount : counter;
          tmpCurrentIntv, currentIntv := GetSet (
-            currentIntv, nocalc, 0, swapcalc, interval (timestamp) );
-         if interval (timestamp) != tmpCurrentIntv {
+            currentIntv, nocalc, 0, swapcalc, interval (sys.timestamp) );
+         if interval (sys.timestamp) != tmpCurrentIntv {
             oldCount, count := GetSet ( count, nocalc, 0, swapcalc, 1 );
             tmpCount := 1;
          }
@@ -277,15 +293,15 @@ module LucidProg refines LucidBase {
                if oldCount >= L {
                   ghost var oldTimestampOn := timestampOn.val;        // ghost
                   tmpTimestampOn, timestampOn := GetSet (
-                     timestampOn, newTime, timestamp, newTime, timestamp);
+                     timestampOn, newTime, sys.timestamp, newTime, sys.timestamp);
                   if oldTimestampOn != tmpTimestampOn { 
-                     timeOn := time - Q;                       // ghost update
+                     timeOn := sys.time - Q;                       // ghost update
                   }
                   // recirc := RecircCmd (false, Non());
                }
                else { // oldCount < L
                   tmpTimestampOn := Get (timestampOn, nocalc, 0);
-                  if (timestamp - tmpTimestampOn) % T >= Q + Roff {
+                  if (sys.timestamp - tmpTimestampOn) % sys.T >= Q + Roff {
                      // time to turn filtering off
                      var tmpRecircPending : bool;
                      tmpRecircPending, recircPending := GetSet (
@@ -301,7 +317,7 @@ module LucidProg refines LucidBase {
                // recirc := RecircCmd (false, Non());
                }
                assert                               // Modified Letup Response
-               creditedProtectingTime (time) >= Roff as int ==> 
+               creditedProtectingTime (sys.time) >= Roff as int ==> 
                   (  recircPending.val 
                   || generatedEvents == {Event(SetFiltering(true), {})}); 
                   //recirc == RecircCmd (true, SetFiltering(true))  );
@@ -311,26 +327,26 @@ module LucidProg refines LucidBase {
          }  // end of filtering case
 
       // Filtering decision:
-         if tmpFiltering && (timestamp - tmpTimestampOn) % T >= Q {
-            allowPacket := filter (time, timestamp, uniqueSig);
+         if tmpFiltering && (sys.timestamp - tmpTimestampOn) % sys.T >= Q {
+            allowPacket := filter (uniqueSig);
          }
          else {  forwarded := true; allowPacket := true; }
       }
 
-      method filter (ghost time: nat, timestamp: uint8, uniqueSig: nat) 
+      method filter (uniqueSig: nat) 
          returns (allowPacket: bool)
          modifies this
-         requires timestamp == time % T
-         requires protectImplmnt (timestamp)
+         requires sys.timestamp == sys.time % sys.T
+         requires protectImplmnt (sys.timestamp)
          requires preRequestSet == requestSet
          requires parameterConstraints ()
-         requires stateInvariant (time, timestamp)
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures forwarded ==>  // Adaptive Protection, needs exact requestSet
                               uniqueSig in preRequestSet
          ensures ! forwarded ==> !(uniqueSig in preRequestSet) // Harmlessness
-         ensures protecting (time)
-         ensures stateInvariant (time, timestamp)
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
+         ensures protecting (sys.time)
+         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures unchanged(this`sys)
       { 
          allowPacket := bloomFilterQuery (uniqueSig);
          forwarded := allowPacket;
@@ -339,52 +355,52 @@ module LucidProg refines LucidBase {
          }
       }
 
-      method setFiltering (ghost time: nat, timestamp: uint8, toWhat: bool) 
+      method setFiltering (toWhat: bool)  
          modifies this
-         requires timestamp == time % T
+         requires sys.timestamp == sys.time % sys.T
          requires parameterConstraints ()
-         requires stateInvariant (time, timestamp)
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
-         ensures stateInvariant (time, timestamp)
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures unchanged(this`sys)
+         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
       { 
          filtering := Set (filtering, swapcalc, toWhat);
          if toWhat {
-            timestampOn := Set (timestampOn, swapcalc, timestamp);
-            timeOn := time;                                    // ghost update
-            actualTimeOn := time;                              // ghost update
+            timestampOn := Set (timestampOn, swapcalc, sys.timestamp);
+            timeOn := sys.time;                                    // ghost update
+            actualTimeOn := sys.time;                              // ghost update
          }
          else {  requestSet := {}; }                           // ghost update
          recircPending := Set (recircPending, swapcalc, false);
       }
 
-      method simulatedHardwareFailure (ghost time: nat, timestamp: uint8)    // ghost
-         modifies this
-         requires timestamp == time % T
+      method simulatedHardwareFailure ()    // ghost
+         modifies {this} - {this.sys}
+         requires sys.timestamp == sys.time % sys.T
          requires parameterConstraints ()
-         requires stateInvariant (time, timestamp)
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
-         ensures stateInvariant (time, timestamp)
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures unchanged(this`sys)
+         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
       {
          filtering, recircPending := Atomic (false), Atomic (false);
          timeOn, actualTimeOn := 0, 0;
          currentIntv, timestampOn, count := Atomic(0), Atomic(0), Atomic(0);
          requestSet := {};
-      }
+      }  
 
-      method simulatedClockTick (ghost time: nat, timestamp: uint8)          // ghost
-         modifies this
-         requires timestamp == time % T
+      method simulatedClockTick ()          // ghost
+         modifies {this} - {this.sys}
+         requires sys.timestamp == sys.time % sys.T
          requires parameterConstraints ()
-         requires stateInvariant (time, timestamp)
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          // Operating assumption to make attack time spans measurable.  
          // Without the "+ 1", the method cannot be verified.
-            requires filtering.val ==> (time + 1) < actualTimeOn + T
-         ensures unchanged(this`queue) ensures unchanged(this`lastTime)
-         ensures stateInvariant (time, timestamp)
+            requires filtering.val ==> (sys.time + 1) < actualTimeOn + sys.T
+         ensures unchanged(this`sys)
+         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
       { 
-         var timePlus : nat := time + 1;
-         var timestampPlus : uint8 := (timestamp + 1) % T;
-         assert stateInvariant (timePlus, timestampPlus);
+         var timePlus : nat := sys.time + 1;
+         var timestampPlus : uint8 := (sys.timestamp + 1) % sys.T;
+         assert stateInvariant (timePlus, timestampPlus, sys.lastTime);
       }
 
       method {:extern}{:axiom} bloomFilterInsert (uniqueSig: nat)
