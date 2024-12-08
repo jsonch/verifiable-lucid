@@ -76,104 +76,72 @@ abstract module LucidBase {
                      q[j].timestamp == q[j].time % T  )
             && (  forall j | 0 <= j < |q|-1 ::
                      q[j].time <= q[j+1].time  )      )  }
-      }      
+      } 
    }
 
-   class Program {
+   class Interpreter {
+      // The interpreter is for running a program.
+      var prog : Program
       var sys : Sys
-
-      var generatedEvents : set<GeneratedEvent>  // the event generated for recirc
-
-      ghost predicate parameterConstraints ()          // define in program
-         reads {this} - {sys}
-      ghost predicate stateInvariant (time: nat, timestamp: uint8, lastTime:nat)
-         reads {this} - {sys}                                    // define in program
-
-      ghost predicate operatingAssumptions (event: Event, time : nat, timestamp: uint8, lastTime:nat)     
-         reads {this} - {sys}                                        // define in program
-
-
-      constructor ()                                   // define in program
-         ensures sys.validQueue (sys.queue)
-         // ensures parameterConstraints () // problem: how can the constructor ever ensure this?
-         ensures fresh(sys)
+      constructor (p : Program)
          ensures fresh(this)
+         ensures sys == prog.sys
          {
-            sys := new Sys();
+            prog := p;
+            sys := p.sys;
          }
 
-      // method simulateArrival (q: seq <TimedEvent>)
-      // // This method adds zero or more events to the queue.
-      //    modifies this
-      //    requires validQueue (queue)
-      //    requires q == queue
-      //    ensures q <= queue           // old queue is a prefix of new queue
-      //    ensures validQueue (queue)
+      method simulateArrival (q: seq <TimedEvent>)
+      // This method adds zero or more events to the queue.
+         modifies sys`queue
+         requires sys.validQueue (sys.queue)
+         requires q == sys.queue
+         ensures q <= sys.queue           // old queue is a prefix of new queue
+         ensures sys.validQueue (sys.queue)
 
       method pickNextEvent (q: seq <TimedEvent>)
-         modifies this, this.sys, sys`lastTime
-         requires generatedEvents == {}
+         modifies sys, sys`lastTime, prog`generatedEvents, prog
+         requires prog.sys == this.sys
+         requires prog.generatedEvents == {}
          requires sys.validQueue (sys.queue)
          requires |sys.queue| > 0
          requires q == sys.queue
-         requires parameterConstraints ()
-         requires stateInvariant (q[0].time, q[0].timestamp, sys.lastTime)
-         requires (sys.time == q[0].time && sys.timestamp == q[0].timestamp) <==> stateInvariant (q[0].time , q[0].timestamp, sys.lastTime)
-         requires operatingAssumptions (q[0].event, q[0].time, q[0].timestamp, sys.lastTime)
+         requires prog.parameterConstraints ()
+         requires prog.stateInvariant (q[0].time, q[0].timestamp, sys.lastTime)
+         requires (sys.time == q[0].time && sys.timestamp == q[0].timestamp) <==> prog.stateInvariant (q[0].time , q[0].timestamp, sys.lastTime)
+         requires prog.operatingAssumptions (q[0].event, q[0].time, q[0].timestamp, sys.lastTime)
          ensures sys.validQueue (sys.queue)
          ensures ( |sys.queue| == |q| - 1 ) || ( |sys.queue| == |q| )
+         ensures prog.sys == this.sys
       { 
-         assert stateInvariant (q[0].time, q[0].timestamp, sys.lastTime);
+         assert prog.stateInvariant (q[0].time, q[0].timestamp, sys.lastTime);
          sys.time := q[0].time;
          sys.timestamp := q[0].timestamp;
-         assert stateInvariant (sys.time, q[0].timestamp, sys.lastTime);
+         assert prog.stateInvariant (sys.time, q[0].timestamp, sys.lastTime);
 
          // sys.timestamp := q[0].timestamp;         
-         dispatch(q[0].event);
+         prog.dispatch(q[0].event);
          sys.lastTime := 0;
          // if an event for recirculation was generated, add it to the queue
          sys.queue := q;
          assert |sys.queue| > 0;
-         while |generatedEvents| > 0
-            modifies this`generatedEvents
+         while |prog.generatedEvents| > 0
+            modifies prog`generatedEvents
             modifies sys`queue
             invariant |sys.queue| > 0
             invariant sys.validQueue(sys.queue)
          {
             assert |sys.queue| > 0;
-            var generatedEvent :| generatedEvent in generatedEvents;
+            var generatedEvent :| generatedEvent in prog.generatedEvents;
             if (generatedEvent.ports == {}) { // recirc event, add to queue
                var recircEvent: TimedEvent := generateRecircEvent(generatedEvent.event);
                sys.queue := sys.queue + [recircEvent];
             }
-            generatedEvents := generatedEvents - {generatedEvent};
+            prog.generatedEvents := prog.generatedEvents - {generatedEvent};
          }
          sys.queue := q[1..];
          // lastTime := q[0].time; 
          sys.lastTime := q[0].time;
-      }
-
-      method dispatch (e: Event)
-         modifies {this} - {this.sys}                                // define in program
-         requires sys.timestamp == sys.time % sys.T
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
-         requires operatingAssumptions (e, sys.time, sys.timestamp, sys.lastTime)
-         requires generatedEvents == {}
-         ensures unchanged(this`sys)
-
-      method generate(e : Event)            // generate recirculation event
-         modifies this`generatedEvents
-         ensures unchanged(this`sys)
-      {
-         generatedEvents := generatedEvents + {Event(e, {})};
-      }
-      method generate_port(p : uint8, e : Event)  // generate output event
-         modifies this`generatedEvents
-         ensures unchanged(this.sys)
-
-      {
-         generatedEvents := generatedEvents + {Event(e, {p})};
       }
 
       method generateRecircEvent (e: Event) returns 
@@ -190,6 +158,55 @@ abstract module LucidBase {
          recircEvent := 
                    TimedEvent(e, sys.queue[|sys.queue|-1].time+1, recircTimestamp);
       }
+
+   }
+
+   class Program {
+      var sys : Sys
+
+      ghost predicate parameterConstraints ()          // define in program
+         reads {this} - {sys}
+      ghost predicate stateInvariant (time: nat, timestamp: uint8, lastTime:nat)
+         reads {this} - {sys}                                    // define in program
+
+      ghost predicate operatingAssumptions (event: Event, time : nat, timestamp: uint8, lastTime:nat)     
+         reads {this} - {sys}                                        // define in program
+
+      constructor ()                                   // define in program
+         ensures sys.validQueue (sys.queue)
+         // ensures parameterConstraints () // problem: how can the constructor ever ensure this?
+         ensures fresh(sys)
+         ensures fresh(this)
+         {
+            sys := new Sys();
+         }
+
+      method dispatch (e: Event)
+         modifies {this} - {this.sys}                                // define in program
+         requires sys.timestamp == sys.time % sys.T
+         requires parameterConstraints ()
+         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         requires operatingAssumptions (e, sys.time, sys.timestamp, sys.lastTime)
+         requires generatedEvents == {}
+         ensures unchanged(this`sys)
+
+
+      var generatedEvents : set<GeneratedEvent>  // the event generated for recirc
+
+      method generate(e : Event)            // generate recirculation event
+         modifies this`generatedEvents
+         ensures unchanged(this`sys)
+      {
+         generatedEvents := generatedEvents + {Event(e, {})};
+      }
+      method generate_port(p : uint8, e : Event)  // generate output event
+         modifies this`generatedEvents
+         ensures unchanged(this.sys)
+
+      {
+         generatedEvents := generatedEvents + {Event(e, {p})};
+      }
+
    }
 }
 

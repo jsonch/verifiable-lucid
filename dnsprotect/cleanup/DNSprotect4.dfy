@@ -10,7 +10,14 @@ study.
 
 
 
+
+
+
 include "lucidBase4.dfy"
+
+
+
+
 
 
 
@@ -132,7 +139,7 @@ module LucidProg refines LucidBase {
 
       method processPacket (dnsRequest: bool, 
                                  uniqueSig: uint16)
-         modifies {this} - {this.sys}
+         modifies {this} - {this.sys} 
          requires generatedEvents == {}
          requires sys.timestamp == sys.time % sys.T
          requires parameterConstraints ()
@@ -167,7 +174,7 @@ module LucidProg refines LucidBase {
          else {   
             var allowPacket := processReply (uniqueSig);
             if (allowPacket) {  
-               generate_port(1, ProcessPacket(false, uniqueSig));
+               generate_port(1, ProcessPacket(false, uniqueSig)); 
             }
          }   
       }
@@ -186,7 +193,7 @@ module LucidProg refines LucidBase {
             bloomFilterInsert (uniqueSig);
             requestSet := requestSet + { uniqueSig };          // ghost update
          }
-         forwarded := true;
+         forwarded := true; 
       }
 
       function interval (timestamp: uint8): uint8
