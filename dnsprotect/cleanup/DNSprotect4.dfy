@@ -61,80 +61,8 @@ include "lucidBase4.dfy"
 
 
 module LucidProg refines LucidBase { 
-   import opened Memop
+   import opened Memop 
 
-   // Parser
-   ghost predicate valid_parser_input(p:Pkt) 
-   {
-      |p.bytes| > 44  // 14 (eth) + 20 (ipv4) + 8 (udp) + 2 (dns request id)
-   }
-
-   ghost predicate parser_spec(p : Pkt, d : ParseDecision<Event>) 
-   {
-      if (p.bytes[12] != 0x08 || p.bytes[13] != 00) then d.GenerateExtern?  // non-ipv4 are dropped
-      else if (p.bytes[23] != 0x11) then d.GenerateExtern?                  // non-udp are dropped
-      else if ((cast_int16(p.bytes[34..36]) == 53))               // sport == 53 => response
-         then (
-            match d 
-               case Generate(ProcessPacket(false, _)) => true
-               case _ => false
-         )
-      else if ((cast_int16(p.bytes[36..38]) == 53))               // dport == 53 => request
-         then (
-            match d 
-               case Generate(ProcessPacket(true, _)) => true
-               case _ => false
-         )
-      else d.GenerateExtern?                               // neither sport nor dport == 53 => forward 
-   }
-
-   function parse(p : Pkt) : ParseDecision<Event>  
-   { 
-    ghost var pre_eth := p.bytes;
-    var (p, dmac) := read48(p);
-    // int<48> dmac = read(48, p);
-    var (p, smac) := read48(p);
-    var (p, ethType) := read16(p);
-    if (ethType == 0x0800) then
-        var p := skip(p, 9);// skip to proto
-        var (p, proto) := read8(p);
-        if (proto == 0x11) then 
-            var p := skip(p, 10); // skip to udp
-            ghost var pre_sport := p.bytes;
-            var (p, sport) := read16(p);
-            ghost var pre_dport := p.bytes;
-            var (p, dport) := read16(p);
-
-            assert (pre_sport[0..2] == pre_eth[34..36]);
-            assert (pre_dport[0..2] == pre_eth[36..38]);
-
-            match (sport, dport) 
-            case (53, _) =>             // case: dns response
-                assert (cast_int16(pre_sport[0..2]) == 53);
-                var dnsRequest := false;
-                var p := skip(p, 4); // skip to dns
-                var (p, dnsId) := read16(p);
-                Generate(ProcessPacket(dnsRequest, dnsId))
-            case (_, 53) =>               // case dns request
-                assert (cast_int16(pre_sport[0..2]) != 53);
-                assert (cast_int16(pre_dport[0..2]) == 53);
-                var dnsRequest := true;
-                var p := skip(p, 4); // skip to dns
-                var (p, dnsId) := read16(p);
-                Generate(ProcessPacket(dnsRequest, dnsId))
-            case (_, _) =>                   // case: non-dns
-                assert (cast_int16(pre_sport[0..2]) != 53);
-                assert (cast_int16(pre_dport[0..2]) != 53);
-               //  assert (pre_sport[0..2] == pre_eth[34..36]);
-               //  assert (pre_dport[0..2] == pre_eth[36..38]);
-                assert (cast_int16(pre_eth[34..36]) != 53);
-                assert (cast_int16(pre_eth[36..38]) != 53);
-                GenerateExtern("Forward")
-        else 
-            GenerateExtern("Forward")      // not udp: forward
-    else // not ipv4 -- drop
-        GenerateExtern("Forward")         // not ipv4: forward
-   }
       
    type counter = uint32              // limit must exceed U
 
@@ -268,12 +196,12 @@ module LucidProg refines LucidBase {
       {
          if dnsRequest {  
             processRequest (uniqueSig);
-            generate_port(1, ProcessPacket(true, uniqueSig));
+            generate_port(1, ProcessPacket(dnsRequest, uniqueSig));
          }
          else {   
             var allowPacket := processReply (uniqueSig);
             if (allowPacket) {  
-               generate_port(1, ProcessPacket(false, uniqueSig)); 
+               generate_port(1, ProcessPacket(dnsRequest, uniqueSig)); 
             }
          }   
       } 
@@ -529,4 +457,83 @@ module LucidProg refines LucidBase {
       // scheduled timeouts which can be delayed.
          ensures ! (uniqueSig in requestSet) ==> (! inSet)
    }
+
+
+   class Parser ... {
+      // Parser
+      static ghost predicate validPacket(p:Packet) 
+      {
+         |p.bytes| >= 44  // 14 (eth) + 20 (ipv4) + 8 (udp) + 2 (dns request id)
+         && p.offset == 0 // number of bytes parsed so far. starts at 0.
+      } 
+
+      static ghost predicate parserSpecification(p : Packet, d : ParseDecision<Event>) 
+      { 
+         if (p.bytes[12] != 0x08 || p.bytes[13] != 00) then d.GenerateExtern?  // non-ipv4 are dropped
+         else if (p.bytes[23] != 0x11) then d.GenerateExtern?                  // non-udp are dropped
+         else if ((ntohs(p.bytes[34..36]) == 53))               // sport == 53 => response
+            then (
+               match d 
+                  case Generate(ProcessPacket(false, _)) => true
+                  case _ => false
+            )
+         else if ((ntohs(p.bytes[36..38]) == 53))               // dport == 53 => request
+            then (
+               match d 
+                  case Generate(ProcessPacket(true, _)) => true
+                  case _ => false
+            )
+         else d.GenerateExtern?                               // neither sport nor dport == 53 => forward 
+      }
+
+      static function parse(p : Packet) : ParseDecision<Event>  
+      { 
+         ghost var pre_eth := p.bytes;
+         var (p, dmac) := read48(p);
+         // int<48> dmac = read(48, p);
+         var (p, smac) := read48(p);
+         var (p, ethType) := read16(p);
+         if (ethType == 0x0800) then
+            var p := skip(p, 9);// skip to proto
+            var (p, proto) := read8(p);
+            if (proto == 0x11) then 
+                  var p := skip(p, 10); // skip to udp
+                  ghost var pre_sport := p.bytes;
+                  var (p, sport) := read16(p);
+                  ghost var pre_dport := p.bytes;
+                  var (p, dport) := read16(p);
+
+                  assert (pre_sport[0..2] == pre_eth[34..36]);
+                  assert (pre_dport[0..2] == pre_eth[36..38]);
+
+                  match (sport, dport) 
+                  case (53, _) =>             // case: dns response
+                     assert (ntohs(pre_sport[0..2]) == 53);
+                     var dnsRequest := false;
+                     var p := skip(p, 4); // skip to dns
+                     var (p, dnsId) := read16(p);
+                     Generate(ProcessPacket(dnsRequest, dnsId))
+                  case (_, 53) =>               // case dns request
+                     assert (ntohs(pre_sport[0..2]) != 53);
+                     assert (ntohs(pre_dport[0..2]) == 53);
+                     var dnsRequest := true;
+                     var p := skip(p, 4); // skip to dns
+                     var (p, dnsId) := read16(p);
+                     Generate(ProcessPacket(dnsRequest, dnsId))
+                  case (_, _) =>                   // case: non-dns
+                     assert (ntohs(pre_sport[0..2]) != 53);
+                     assert (ntohs(pre_dport[0..2]) != 53);
+                     //  assert (pre_sport[0..2] == pre_eth[34..36]);
+                     //  assert (pre_dport[0..2] == pre_eth[36..38]);
+                     assert (ntohs(pre_eth[34..36]) != 53);
+                     assert (ntohs(pre_eth[36..38]) != 53);
+                     GenerateExtern("ForwardUdp")
+            else 
+                  GenerateExtern("ForwardIp")      // not udp: forward
+         else
+            GenerateExtern("ForwardEth")         // not ipv4: forward
+      }
+   }
+
+
 }

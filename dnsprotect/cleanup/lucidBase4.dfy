@@ -30,6 +30,7 @@ Changes [5-12-2024]
 -------------------------------------------------------------------------*/
 
 module Types {
+   // Integer types to use in executable code
    type uint8 = x : nat | 0 <= x < 256
    type uint16 = x : nat | 0 <= x < 65536
    type uint20 = x : nat | 0 <= x < 1048576
@@ -38,23 +39,38 @@ module Types {
    type uint48 = x : int | 0 <= x < 281474976710656
 }
 
-module Parse {
+module ParseUtils {
+   // Utilities to use in the parser definition
    import opened Types
-   datatype Pkt = Packet(bytes : seq<uint8>, offset : nat)
+   // A packet is a sequence of bytes, and a counter that 
+   // tracks how many bytes have been read from the packet
+   // up to this point.
+   datatype Packet = Packet(bytes : seq<uint8>, ghost offset : nat)
+   // A parser returns a decision on what to do with the packet
+   // either drop it, generate an event defined in the program, 
+   // or generate an event defined externally.
    datatype ParseDecision<Event> = 
       | Drop() 
       | Generate(e:Event)
       | GenerateExtern(name:string)
 
-   // parser builtins to read integers of various sizes, 
-   // and skip reginos of the byte sequence.
-   function read8(p : Pkt) : (Pkt, uint8)
+   // Parser helper functions
+   // skip n bytes from the packet
+   function skip(p : Packet, n : nat) : Packet
+      requires (|p.bytes| >= n)
+      ensures (skip(p, n).bytes == p.bytes[n..])
+   {
+      Packet(p.bytes[n..], p.offset + n)
+   }
+
+   // read 8 bits (1 byte) from the packet
+   function read8(p : Packet) : (Packet, uint8)
       requires (|p.bytes| > 0)
       ensures (read8(p).0.bytes == p.bytes[1..])
    {
       (Packet(p.bytes[1..], p.offset + 1), p.bytes[0])
    }
-   function read16(p : Pkt) : (Pkt, uint16)
+   function read16(p : Packet) : (Packet, uint16)
       requires (|p.bytes| > 1)
       ensures (read16(p).0.bytes == p.bytes[2..])
    {
@@ -63,12 +79,7 @@ module Parse {
       var out := out + (p.bytes[1] as uint16);
       (Packet(p.bytes[2..], p.offset + 2), (p.bytes[0] as uint16) * 256 + (p.bytes[1] as uint16))
    }
-   function cast_int16(bs : seq<uint8>) : uint16
-      requires (|bs| == 2)
-   {
-      (bs[0] as uint16) * 256 + (bs[1] as uint16)
-   }
-   function read32(p : Pkt) : (Pkt, int)
+   function read32(p : Packet) : (Packet, int)
       requires (|p.bytes| > 3)
       ensures (read32(p).0.bytes == p.bytes[4..])
    {
@@ -79,7 +90,7 @@ module Parse {
       var out := out + (p.bytes[3] as uint32);
       (Packet(p.bytes[4..], p.offset + 4), out)
    }
-   function read48(p : Pkt) : (Pkt, int)
+   function read48(p : Packet) : (Packet, int)
       requires (|p.bytes| > 5)
       ensures (read48(p).0.bytes == p.bytes[6..])
    {
@@ -92,6 +103,18 @@ module Parse {
       var out := out + (p.bytes[5] as uint48);
       (Packet(p.bytes[6..], p.offset + 6), out)
    }
+
+   // the classic "network to host short" function
+   function ntohs(bs : seq<uint8>) : uint16
+      requires (|bs| == 2)
+   {
+      (bs[0] as uint16) * 256 + (bs[1] as uint16)
+   }
+   function htons(x : uint16) : seq<uint8>
+   {
+      [msb(x), lsb(x)]
+   }
+
    function msb(x : uint16) : uint8
    {
       (x / 256) as uint8
@@ -100,35 +123,11 @@ module Parse {
    {
       (x % 256) as uint8
    }
-   function write16(x : uint16) : seq<uint8>
-   {
-      [msb(x), lsb(x)]
-   }
-   function skip(p : Pkt, n : nat) : Pkt
-      requires (|p.bytes| >= n)
-      ensures (skip(p, n).bytes == p.bytes[n..])
-   {
-      Packet(p.bytes[n..], p.offset + n)
-   }
-
 
 }
 
-
 abstract module LucidBase {
    import opened Types
-
-   // optional parser helpers, specification, and predicate
-   import opened Parse
-   ghost predicate valid_parser_input(p:Pkt) 
-
-   ghost predicate parser_spec(p : Pkt, d : ParseDecision<Event>) 
-      requires valid_parser_input(p)
-
-   function parse(p : Pkt) : ParseDecision<Event>
-      requires p.offset == 0
-      requires valid_parser_input(p) 
-      ensures (parser_spec(p, parse(p)))
 
    type Event (==)
    datatype TimedEvent = 
@@ -301,6 +300,18 @@ abstract module LucidBase {
       }
 
    }
+
+   import opened ParseUtils
+   class Parser {
+      static ghost predicate validPacket(p:Packet) 
+      static ghost predicate parserSpecification(p : Packet, d : ParseDecision<Event>) 
+         requires validPacket(p)
+      static function parse(p : Packet) : ParseDecision<Event>
+         requires p.offset == 0
+         requires validPacket(p) 
+         ensures (parserSpecification(p, parse(p)))
+   } 
+
 }
 
 
