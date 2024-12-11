@@ -26,7 +26,7 @@ module LucidProg refines LucidBase {
 class Program ... {
 
    // Parameters
-   const I : nat := 16             // interval length, < T and a power of 2
+   const I : bits := 16            // interval length, < T and a power of 2
    const Q : bits                              // maximum DNS response time
    const Roff : bits           // observation window for stopping filtering
    const U : counter                               // upper count threshold
@@ -46,9 +46,9 @@ class Program ... {
    var recircPending : StateVar <bool>   // a "semaphore" for recirculation
 
    ghost predicate parameterConstraints ()           // from problem domain
-      {  Roff > I > 0 && Q > 0 && 0 < U < L < 1048576  }
+      {  Roff > exp2(I) > 0 && Q > 0 && 0 < U < L < 1048576  }
 
-   constructor ()
+   constructor () 
       ensures validQueue (queue) 
       // ensures parameterConstraints ()
       ensures stateInvariant (0, 0)
@@ -117,7 +117,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       }
    } 
 
-   method processPacket (time: nat, timestamp: bits, dnsRequest: bool, 
+   method processPacket (ghost time: nat, timestamp: bits, dnsRequest: bool, 
                                 uniqueSig: nat) returns (recirc: RecircCmd)
       modifies this
       requires timestamp == time % T
@@ -152,7 +152,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       else {  recirc := processReply (time, timestamp, uniqueSig); }   
    }
 
-   method processRequest (time: nat, timestamp: bits, uniqueSig: nat)
+   method processRequest (ghost time: nat, timestamp: bits, uniqueSig: nat)
       modifies this
       requires timestamp == time % T
       requires parameterConstraints ()
@@ -172,7 +172,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
    function interval (timestamp: bits): bits
       reads this
       requires parameterConstraints ()
-   {  timestamp / I  }                    // implemented with a right-shift
+   {  bitShiftDivision(timestamp, I) } // implemented with a right-shift
  
    function upperBoundedIncr (count: counter, unused: counter) : counter
    // this is a custom memcalc
@@ -188,7 +188,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       reads this
    {  time - (timeOn + Q)  }
 
-   method processReply (time: nat, timestamp: bits, uniqueSig: nat) 
+   method processReply (ghost time: nat, timestamp: bits, uniqueSig: nat) 
                                                 returns (recirc: RecircCmd)
       modifies this
       requires timestamp == time % T
@@ -303,16 +303,16 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       }  // end of filtering case
 
    // Filtering decision:
-      if tmpFiltering && (time - tmpTimestampOn) % T >= Q {
+      if tmpFiltering && (timestamp - tmpTimestampOn) % T >= Q {
          filter (time, timestamp, uniqueSig);
       }
       else {  forwarded := true; }
    }
 
-   method filter (time: nat, timestamp: bits, uniqueSig: nat) 
+   method filter (ghost time: nat, timestamp: bits, uniqueSig: nat) 
       modifies this
       requires timestamp == time % T
-      requires protectImplmnt (timestamp)
+      requires protectImplmnt (timestamp) 
       requires preRequestSet == requestSet
       requires parameterConstraints ()
       requires stateInvariant (time, timestamp)
@@ -329,7 +329,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       }
    }
 
-   method setFiltering (time: nat, timestamp: bits, toWhat: bool) 
+   method setFiltering (ghost time: nat, timestamp: bits, toWhat: bool) 
       modifies this
       requires timestamp == time % T
       requires parameterConstraints ()
@@ -347,7 +347,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       recircPending := Set (recircPending, swapcalc, false);
    }
 
-   method simulatedHardwareFailure (time: nat, timestamp: bits)    // ghost
+   method simulatedHardwareFailure (ghost time: nat, timestamp: bits)    // ghost
       modifies this
       requires timestamp == time % T
       requires parameterConstraints ()
@@ -361,7 +361,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       requestSet := {};
    }
 
-   method simulatedClockTick (time: nat, timestamp: bits)          // ghost
+   method simulatedClockTick (ghost time: nat, timestamp: bits)          // ghost
       modifies this
       requires timestamp == time % T
       requires parameterConstraints ()

@@ -8,7 +8,11 @@ REFINEMENT OF MEMORY ACCESSES
 1. Added a "Types" module with integer types to use in executable code.
 2. Added a "ParseUtils" module with utilities to use in the parser definition.
 3. Added a "Parser" class with a parser input condition, a specification, and implementation function.
-4. Changed event generation semantics. Now: 
+4. Make the filtering decision (~310) depend on timestamp, not time
+5. Make "time" and "lastTime" ghost parameters, since the implementation does not know the unbounded time.
+6. Added "bitShiftDivision" helper function to divide by a power of 2.
+
+N. Changed event generation semantics. Now: 
    - to generate a recirculation event, 
       the program calls a "generate(event)" helper, 
       rather than returning a recircCmd
@@ -17,7 +21,7 @@ REFINEMENT OF MEMORY ACCESSES
       rather than setting a "ports" variable.
 */
 
-module Types {
+module IntTypes {
    // Integer types to use in executable code
    type uint8 = x : nat | 0 <= x < 256
    type uint16 = x : nat | 0 <= x < 65536
@@ -25,22 +29,50 @@ module Types {
    type uint24 = x : nat | 0 <= x < 16777216
    type uint32 = x : nat | 0 <= x < 4294967296
    type uint48 = x : int | 0 <= x < 281474976710656
+
+   function IsPowerOf2(n: nat): bool
+   { 
+      if n == 0 then false
+      else if n == 1 then true
+      else if n % 2 != 0 then false
+      else IsPowerOf2(n/2)
+   }   
+   function exp2(i: nat): nat
+      ensures exp2(i) != 0
+   {
+      if i == 0 then 1
+      else 2 * exp2(i-1)
+   } 
+
+   function rightShift(x:nat, i:nat) : nat 
+   {
+      if (i == 0) then x
+      else rightShift(x / 2, i - 1)
+   }
+
+   function bitShiftDivision(x: nat, i: nat): nat
+      // x / i, where i is a power of 2
+      requires IsPowerOf2(i)
+      ensures bitShiftDivision(x, i) == x / i
+   {
+      x / i
+   }
 }
 
 abstract module LucidBase {
-   import opened Types
+   import opened IntTypes
    type bits = uint8                   // bound (256) must match parameter T
 
    type Event (==)
    datatype TimedEvent = 
-      TimedEvent (event: Event, time: nat, timestamp: bits)
+      TimedEvent (event: Event, ghost time: nat, timestamp: bits)
             
    datatype RecircCmd = RecircCmd (generate: bool, event: Event)
 
    class Program {
       const T : nat := 256               // number must match limit on bits
       var queue : seq <TimedEvent>
-      var lastTime : nat
+      ghost var lastTime : nat
 
       ghost predicate parameterConstraints ()          // define in program
          reads this
@@ -114,7 +146,7 @@ abstract module LucidBase {
          ensures recircEvent.timestamp == recircEvent.time % T
       {
          var recircTimestamp: bits;
-         recircTimestamp := (queue[|queue|-1].time + 1) % T;
+         recircTimestamp := (queue[|queue|-1].timestamp + 1) % T;
          recircEvent := 
                    TimedEvent(e, queue[|queue|-1].time+1, recircTimestamp);
       }
@@ -171,7 +203,7 @@ module Memop {
 
 module ParseUtils {
    // Utilities to use in the parser definition
-   import opened Types
+   import opened IntTypes
    // A packet is a sequence of bytes, and a counter that 
    // tracks how many bytes have been read from the packet
    // up to this point.
