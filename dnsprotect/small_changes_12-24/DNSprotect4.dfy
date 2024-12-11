@@ -39,14 +39,14 @@ class Program ... {
    ghost var timeOn : nat         // effective time filtering was turned on
    var timestampOn : StateVar <bits>            // implementation of timeOn
    ghost var requestSet : set <nat>      // pending requests, for filtering
-   var forwarded: bool                        // fate of the current packet
+   ghost var forwarded: bool                        // fate of the current packet
    var ports : set <nat>          // output ports where packet is forwarded
    ghost var actualTimeOn : nat          // actual time filtering turned on
    ghost var preRequestSet : set <nat>       // requestSet, before deletion
    var recircPending : StateVar <bool>   // a "semaphore" for recirculation
 
    ghost predicate parameterConstraints ()           // from problem domain
-      {  Roff > exp2(I) > 0 && Q > 0 && 0 < U < L < 1048576  }
+      {  Roff > I > 0 && Q > 0 && 0 < U < L < 1048576  }
 
    constructor () 
       ensures validQueue (queue) 

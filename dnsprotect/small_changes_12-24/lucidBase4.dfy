@@ -5,20 +5,36 @@ REFINEMENT OF EXTERNAL DATA STRUCTURES AND
 REFINEMENT OF MEMORY ACCESSES
 -------------------------------------------------------------------------*/
 /* Small changes (11/12/24) 
-1. Added a "Types" module with integer types to use in executable code.
-2. Added a "ParseUtils" module with utilities to use in the parser definition.
-3. Added a "Parser" class with a parser input condition, a specification, and implementation function.
-4. Make the filtering decision (~310) depend on timestamp, not time
-5. Make "time" and "lastTime" ghost parameters, since the implementation does not know the unbounded time.
-6. Added "bitShiftDivision" helper function to divide by a power of 2.
+1. Added a "Types" module with fixed-width integer types to use in executable code.
+1. Parsing additions: 
+   1. Add a "ParseUtils" module with parsing helpers, e.g., a "Packet" class and 
+      functions to read bytes from the packet into local variables.
+   2. Added a "Parser" class in the LucidBase, which the programmer extends 
+      to implement and verify their parser. The Parser class contains a user-defined: 
+      - valid input packet predicate, 
+      - parser specification, and 
+      - parser implementation function.
+3. Make the filtering decision (in DNSprotect.dfy) depend on timestamp, not time.
+   """
+   // Filtering decision:
+      if tmpFiltering && (timestamp - tmpTimestampOn) % T >= Q {
+         filter (time, timestamp, uniqueSig);
+      }
+      else {  forwarded := true; }
+   """
+4. Change "time" and "lastTime" into ghost parameters, 
+   since the implementation does not know the unbounded time.
+5. Added "bitShiftDivision" helper function to divide by a power of 2 in executable code
 
-N. Changed event generation semantics. Now: 
+[todo] N. Change event generation semantics. Now: 
    - to generate a recirculation event, 
       the program calls a "generate(event)" helper, 
       rather than returning a recircCmd
    - to generate an output packet, i.e., forward, 
       the program calls a "generatePort(event)" helper, 
       rather than setting a "ports" variable.
+
+[todo optional] N+1. Make timestamp a variable rather than passed in as an argument.
 */
 
 module IntTypes {
@@ -37,19 +53,6 @@ module IntTypes {
       else if n % 2 != 0 then false
       else IsPowerOf2(n/2)
    }   
-   function exp2(i: nat): nat
-      ensures exp2(i) != 0
-   {
-      if i == 0 then 1
-      else 2 * exp2(i-1)
-   } 
-
-   function rightShift(x:nat, i:nat) : nat 
-   {
-      if (i == 0) then x
-      else rightShift(x / 2, i - 1)
-   }
-
    function bitShiftDivision(x: nat, i: nat): nat
       // x / i, where i is a power of 2
       requires IsPowerOf2(i)

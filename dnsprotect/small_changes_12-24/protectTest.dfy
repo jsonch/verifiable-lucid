@@ -4,12 +4,14 @@ SINGLE-SWITCH ALGORITHM AND ITS SPECIFICATION (verified)
 This is the algorithm to be implemented for protection against DNS
 reflection attacks, in its most abstract and readable form.
 -------------------------------------------------------------------------*/
+// NEW: Parser class implementation and test
 include "baseTest.dfy"
 
 module LucidProg refines LucidBase {
+   import opened IntTypes
 
    datatype Event =
-    | ProcessPacket (dnsRequest: bool, uniqueSig: nat)
+    | ProcessPacket (dnsRequest: bool, uniqueSig: uint16)
     | SimulatedClockTick ()
     | SimulatedHardwareFailure ()
 
@@ -244,10 +246,102 @@ class Program ... {
       assert stateInvariant (timePlus);
    }
 }
+
+// 
+class Parser ... { 
+   // Parser 
+   static ghost predicate validPacket(p:Packet) 
+   {
+      |p.bytes| >= 44  // 14 (eth) + 20 (ipv4) + 8 (udp) + 2 (dns request id)
+      && p.offset == 0 // number of bytes parsed so far. starts at 0.
+   } 
+
+   static ghost predicate parserSpecification(p : Packet, d : ParseDecision<Event>) 
+   { 
+      if (p.bytes[12] != 0x08 || p.bytes[13] != 00) then d.GenerateExtern?  // non-ipv4 are dropped
+      else if (p.bytes[23] != 0x11) then d.GenerateExtern?                  // non-udp are dropped
+      else if ((ntohs(p.bytes[34..36]) == 53))               // sport == 53 => response
+         then (
+            match d 
+               case Generate(ProcessPacket(false, _)) => true
+               case _ => false
+         )
+      else if ((ntohs(p.bytes[36..38]) == 53))               // dport == 53 => request
+         then (
+            match d 
+               case Generate(ProcessPacket(true, _)) => true
+               case _ => false
+         )
+      else d.GenerateExtern?                               // neither sport nor dport == 53 => forward 
+   }
+
+   static function parse(p : Packet) : ParseDecision<Event>  
+   { 
+      ghost var pre_eth := p.bytes;
+      var (p, dmac) := read48(p);
+      // int<48> dmac = read(48, p);
+      var (p, smac) := read48(p);
+      var (p, ethType) := read16(p);
+      if (ethType == 0x0800) then
+         var p := skip(p, 9);// skip to proto
+         var (p, proto) := read8(p);
+         if (proto == 0x11) then 
+               var p := skip(p, 10); // skip to udp
+               ghost var pre_sport := p.bytes;
+               var (p, sport) := read16(p);
+               ghost var pre_dport := p.bytes;
+               var (p, dport) := read16(p);
+
+               assert (pre_sport[0..2] == pre_eth[34..36]);
+               assert (pre_dport[0..2] == pre_eth[36..38]);
+
+               match (sport, dport) 
+               case (53, _) =>             // case: dns response
+                  assert (ntohs(pre_sport[0..2]) == 53);
+                  var dnsRequest := false;
+                  var p := skip(p, 4); // skip to dns
+                  var (p, dnsId) := read16(p);
+                  Generate(ProcessPacket(dnsRequest, dnsId))
+               case (_, 53) =>               // case dns request
+                  assert (ntohs(pre_sport[0..2]) != 53);
+                  assert (ntohs(pre_dport[0..2]) == 53);
+                  var dnsRequest := true;
+                  var p := skip(p, 4); // skip to dns
+                  var (p, dnsId) := read16(p);
+                  Generate(ProcessPacket(dnsRequest, dnsId))
+               case (_, _) =>                   // case: non-dns
+                  assert (ntohs(pre_sport[0..2]) != 53);
+                  assert (ntohs(pre_dport[0..2]) != 53);
+                  //  assert (pre_sport[0..2] == pre_eth[34..36]);
+                  //  assert (pre_dport[0..2] == pre_eth[36..38]);
+                  assert (ntohs(pre_eth[34..36]) != 53);
+                  assert (ntohs(pre_eth[36..38]) != 53);
+                  GenerateExtern("ForwardEth", [dmac, smac]) 
+         else  
+               GenerateExtern("ForwardEth", [dmac, smac])      // not udp: forward
+      else
+         GenerateExtern("ForwardEth", [dmac, smac])         // not ipv4: forward
+   }
+}
+
+
+
 }
 
 import opened LucidProg
-method Main ()
+import opened IntTypes
+import opened ParseUtils
+
+method printState (prog : Program)
+{
+   print "filtering: ", prog.filtering, 
+         "   forwarded: ", prog.forwarded, "\n";
+   print "currentIntv: ", prog.currentIntv, 
+         "   actualTimeOn: ", prog.actualTimeOn, 
+         "   timeOn: ", prog.timeOn, "\n";
+}
+
+method NoParserTest ()
 // To run a test, you must define the constants inline.
 // To run a test, initialize the queue with your test events, as shown
 //    below.
@@ -291,11 +385,7 @@ method Main ()
       {
          if |prog.queue| > 0 {  
             prog.pickNextEvent (prog.queue);  
-            print "filtering: ", prog.filtering, 
-                  "   forwarded: ", prog.forwarded;
-            print "currentIntv: ", prog.currentIntv, 
-                  "   actualTimeOn: ", prog.actualTimeOn, 
-                  "   timeOn: ", prog.timeOn;
+            printState(prog);
          }
          prog.simulateArrivals (prog.queue);
          maxSteps := maxSteps - 1;
@@ -303,7 +393,113 @@ method Main ()
    }
    else {  print "Initial queue or state is not valid.\n"; }
 }
-/*
+
+
+
+
+method serializeEvent(e : Event) returns (pkt : Packet)
+   // serialize an event to a Packet
+   ensures Parser.validPacket(pkt) 
+{
+   var eth_dst : seq<uint8> := [0x0, 0x1, 0x2, 0x3, 0x4, 0x5];
+   var eth_src : seq<uint8> := [0x6, 0x7, 0x8, 0x9, 0xa, 0xb];
+   var eth_ty  : seq<uint8> := htons(0x0800);
+   var eth_hdr : seq<uint8> := eth_dst + eth_src + eth_ty;
+   var ip_hdr  : seq<uint8> := seq(9, _ => 0x0) + [0x11] + seq(10, _ => 0x0); // udp proto
+   var misc_udp_port : seq<uint8> := [0x11, 0x22]; // a random udp port 
+   var udp_csum : seq<uint8> := seq(4, _ => 0x0); // blank padding after udp ports
+
+   match e {
+      case ProcessPacket(dnsRequest, uniqueSig) => 
+         if (dnsRequest == true) { 
+            var bytes : seq<uint8> := eth_hdr + ip_hdr            // eth + ip
+               + misc_udp_port + htons(53) +  udp_csum          // udp
+               + htons(uniqueSig);                              // dns    
+            assert |bytes| >= 44;
+            pkt := Packet(bytes, 0);
+         } else
+            {
+            var bytes : seq<uint8> := eth_hdr + ip_hdr            // eth + ip
+               + htons(53) + misc_udp_port +  udp_csum          // udp
+               + htons(uniqueSig);                              // dns            
+            assert |bytes| >= 44;
+            pkt := Packet(bytes, 0);
+
+         }
+      case _ => pkt := Packet(seq(64, _ => 0), 0);
+   }
+}
+method ParserTest ()
+// Same as OldMain, but with parser.
+{
+   var prog := new Program ();
+   var maxSteps := 10;              // set maximum number of events handled
+                                                      // expect !filtering
+
+   var inputEvents := [ProcessPacket(false,31), ProcessPacket(true,32), ProcessPacket(false,33), ProcessPacket(true,34), ProcessPacket(false,35), ProcessPacket(false,34), ProcessPacket(true,36), ProcessPacket(false,34), ProcessPacket(false,36)];                                                         
+   // When testing with a parser, the input events are serialized into packets
+   // those packets are then parsed and the resulting events are timed and
+   // put into the queue.  The queue is then processed the same way as 
+   // for a test without a parser.
+   var packets := [];
+   for i := 0 to |inputEvents|
+      invariant |packets| == i
+      invariant (forall i :: 0 <= i < |packets| ==> Parser.validPacket(packets[i]))
+   {
+      var pkt := serializeEvent(inputEvents[i]);
+      assert (Parser.validPacket(pkt));
+      packets := packets + [pkt];
+
+   }
+   var arrivalTimes := [20, 24, 28, 30, 36, 40, 52, 70, 87];
+   // run the parser to build a seq of timedEvents
+   var timedEvents : seq<TimedEvent> := [];
+   var n_events := 0;
+   for i := 0 to |packets| 
+      invariant |timedEvents| == i
+   {
+      var parserDecision := Parser.parse(packets[i]);
+      expect (parserDecision.Generate?); // expect correct parsing.
+      var e := parserDecision.e;
+      timedEvents := timedEvents + [TimedEvent(e, arrivalTimes[i])];
+   }
+   assert (|packets| == |timedEvents|);
+   // end parser-specific test code
+
+   // set the input queue
+   prog.queue := timedEvents;
+   // run the test
+   if (  prog.validQueue (prog.queue) 
+      && prog.stateInvariant (prog.queue[0].time)  )  {
+      while (maxSteps > 0) 
+         invariant 
+            prog.validQueue (prog.queue) 
+         && (|prog.queue| > 0 ==> prog.stateInvariant (prog.queue[0].time))
+      {
+         if |prog.queue| > 0 {  
+            prog.pickNextEvent (prog.queue);  
+            printState(prog);
+         }
+         prog.simulateArrivals (prog.queue);
+         maxSteps := maxSteps - 1;
+      }
+   }
+   else {  print "Initial queue or state is not valid.\n"; }
+}
+
+method Main() 
+{
+   print ("----------- test without parser ----------\n");
+   NoParserTest();
+   print("\n");
+   print ("----------- test with parser ----------\n");
+   ParserTest();
+   print("\n");
+}
+
+
+
+/* 
 There is a lot to do to finalize this testing capability.
  * discuss/fix/handle commented issues above.
  * document/note all formerly-ghost structures.
