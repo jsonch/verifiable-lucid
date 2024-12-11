@@ -26,16 +26,109 @@ Changes [5-12-2024]
    does not have to be aware about "TimedEvent"s.
 10.Add condition to stateInvariant so that it must hold on 0 args.
 11.Move queue and T into Sys.
+12.add "Parse" module and parser to verify
 -------------------------------------------------------------------------*/
 
-
-abstract module LucidBase {
-
+module Types {
    type uint8 = x : nat | 0 <= x < 256
    type uint16 = x : nat | 0 <= x < 65536
    type uint20 = x : nat | 0 <= x < 1048576
    type uint24 = x : nat | 0 <= x < 16777216
    type uint32 = x : nat | 0 <= x < 4294967296
+   type uint48 = x : int | 0 <= x < 281474976710656
+}
+
+module Parse {
+   import opened Types
+   datatype Pkt = Packet(bytes : seq<uint8>, offset : nat)
+   datatype ParseDecision<Event> = 
+      | Drop() 
+      | Generate(e:Event)
+      | GenerateExtern(name:string)
+
+   // parser builtins to read integers of various sizes, 
+   // and skip reginos of the byte sequence.
+   function read8(p : Pkt) : (Pkt, uint8)
+      requires (|p.bytes| > 0)
+      ensures (read8(p).0.bytes == p.bytes[1..])
+   {
+      (Packet(p.bytes[1..], p.offset + 1), p.bytes[0])
+   }
+   function read16(p : Pkt) : (Pkt, uint16)
+      requires (|p.bytes| > 1)
+      ensures (read16(p).0.bytes == p.bytes[2..])
+   {
+      var out : uint16 := 0;
+      var out := out + (p.bytes[0] as uint16) * 256;
+      var out := out + (p.bytes[1] as uint16);
+      (Packet(p.bytes[2..], p.offset + 2), (p.bytes[0] as uint16) * 256 + (p.bytes[1] as uint16))
+   }
+   function cast_int16(bs : seq<uint8>) : uint16
+      requires (|bs| == 2)
+   {
+      (bs[0] as uint16) * 256 + (bs[1] as uint16)
+   }
+   function read32(p : Pkt) : (Pkt, int)
+      requires (|p.bytes| > 3)
+      ensures (read32(p).0.bytes == p.bytes[4..])
+   {
+      var out : uint32 := 0;
+      var out := out + (p.bytes[0] as uint32) * 256 * 256 * 256;
+      var out := out + (p.bytes[1] as uint32) * 256 * 256;
+      var out := out + (p.bytes[2] as uint32) * 256;
+      var out := out + (p.bytes[3] as uint32);
+      (Packet(p.bytes[4..], p.offset + 4), out)
+   }
+   function read48(p : Pkt) : (Pkt, int)
+      requires (|p.bytes| > 5)
+      ensures (read48(p).0.bytes == p.bytes[6..])
+   {
+      var out : uint48 := 0;
+      var out := out + (p.bytes[0] as uint48) * 256 * 256 * 256 * 256 * 256;
+      var out := out + (p.bytes[1] as uint48) * 256 * 256 * 256 * 256;
+      var out := out + (p.bytes[2] as uint48) * 256 * 256 * 256;
+      var out := out + (p.bytes[3] as uint48) * 256 * 256;
+      var out := out + (p.bytes[4] as uint48) * 256;
+      var out := out + (p.bytes[5] as uint48);
+      (Packet(p.bytes[6..], p.offset + 6), out)
+   }
+   function msb(x : uint16) : uint8
+   {
+      (x / 256) as uint8
+   }
+   function lsb(x : uint16) : uint8
+   {
+      (x % 256) as uint8
+   }
+   function write16(x : uint16) : seq<uint8>
+   {
+      [msb(x), lsb(x)]
+   }
+   function skip(p : Pkt, n : nat) : Pkt
+      requires (|p.bytes| >= n)
+      ensures (skip(p, n).bytes == p.bytes[n..])
+   {
+      Packet(p.bytes[n..], p.offset + n)
+   }
+
+
+}
+
+
+abstract module LucidBase {
+   import opened Types
+
+   // optional parser helpers, specification, and predicate
+   import opened Parse
+   ghost predicate valid_parser_input(p:Pkt) 
+
+   ghost predicate parser_spec(p : Pkt, d : ParseDecision<Event>) 
+      requires valid_parser_input(p)
+
+   function parse(p : Pkt) : ParseDecision<Event>
+      requires p.offset == 0
+      requires valid_parser_input(p) 
+      ensures (parser_spec(p, parse(p)))
 
    type Event (==)
    datatype TimedEvent = 
@@ -210,7 +303,8 @@ abstract module LucidBase {
    }
 }
 
-module Memop {
+
+module Memop { 
    type memcalc<!t> = (t, t) -> t
 
    datatype StateVar<t> = Atomic (val: t)
