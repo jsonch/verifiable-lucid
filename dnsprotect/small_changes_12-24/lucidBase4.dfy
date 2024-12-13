@@ -5,7 +5,10 @@ REFINEMENT OF EXTERNAL DATA STRUCTURES AND
 REFINEMENT OF MEMORY ACCESSES
 -------------------------------------------------------------------------*/
 /* Small changes (11/12/24) 
-1. Added a "Types" module with fixed-width integer types to use in executable code.
+1. Added a "IntTypes" module with fixed-width integer types to use in executable code.
+   - This is just generalizing what we have already done with the "bits" and 
+     "counter" type. And it is useful for parsing.
+
 1. Parsing additions: 
    1. Add a "ParseUtils" module with parsing helpers, e.g., a "Packet" class and 
       functions to read bytes from the packet into local variables.
@@ -14,7 +17,15 @@ REFINEMENT OF MEMORY ACCESSES
       - valid input packet predicate, 
       - parser specification, and 
       - parser implementation function.
-3. Make the filtering decision (in DNSprotect.dfy) depend on timestamp, not time.
+   3. Added a working parser and specification to the corresponding DNSProtect4.dfy.
+
+3. Change "time" and "lastTime" into ghost parameters, 
+   since the implementation does not know the unbounded time.
+
+4. Make the filtering decision (in DNSprotect.dfy) depend on timestamp, 
+   not time. I think this is necessary because filter is executable code, 
+   and now that "time" is a ghost variable, it is not available in the
+   implementation.
    """
    // Filtering decision:
       if tmpFiltering && (timestamp - tmpTimestampOn) % T >= Q {
@@ -22,40 +33,23 @@ REFINEMENT OF MEMORY ACCESSES
       }
       else {  forwarded := true; }
    """
-4. Change "time" and "lastTime" into ghost parameters, 
-   since the implementation does not know the unbounded time.
 
 5. Use event generation to represent forwarding:
+   - "forward" is now a ghost variable.
+   - to generate an output packet in the implementation, call 
+     the new a "generateOutput(port, event)" helper, 
+      rather than setting a "ports" variable.
+   - generateOutput can also be passed an event variable named 
+     "thisEvent" that represents the current event being processed.
    NOTE: this requires several small changes across the program. 
          they are marked with "CHANGE" in comments.
-   - to generate an output packet, i.e., forward, 
-      the program calls a "generatePort(event)" helper, 
-      rather than setting a "ports" variable.
-   - in the future, we can also use a similar approach for 
-     recirculation: to generate a recirculation event, 
-      the program calls a "generate(event)" helper, 
-      rather than returning a recircCmd through the dispatch method.
-
-[todo optional] N+1. Make timestamp a variable rather than passed in as an argument.
+   NOTE: if we were executing the dafny code or writing a 
+         specification that reasoned about what event
+         was generated, we would want "thisEvent" to be set before
+         dispatch, and "ports" to be reset before dispatch.
 */
 
-module IntTypes {
-   // Integer types to use in executable code
-   type uint8 = x : nat | 0 <= x < 256
-   type uint16 = x : nat | 0 <= x < 65536
-   type uint20 = x : nat | 0 <= x < 1048576
-   type uint24 = x : nat | 0 <= x < 16777216
-   type uint32 = x : nat | 0 <= x < 4294967296
-   type uint48 = x : int | 0 <= x < 281474976710656
 
-   function IsPowerOf2(n: nat): bool
-   { 
-      if n == 0 then false
-      else if n == 1 then true
-      else if n % 2 != 0 then false
-      else IsPowerOf2(n/2)
-   }   
-}
 
 abstract module LucidBase {
    import opened IntTypes
@@ -72,9 +66,13 @@ abstract module LucidBase {
       var queue : seq <TimedEvent>
       ghost var lastTime : nat
 
-      ghost var forwarded: bool                        // fate of the current packet      
-      var ports : set <nat>          // output ports where packet is forwarded
-
+      ghost var forwarded: bool               // fate of the current packet      
+      var ports : set <nat>       // output ports where packet is forwarded
+      var thisEvent : Event       // the current event being processed, 
+                                  // stored immediately before each dispatch, 
+                                  // used for generating output events. 
+                                  // Compiles to the lucid builtin "this", 
+                                  // which has the same meaning and usage.
 
       ghost predicate parameterConstraints ()          // define in program
          reads this
@@ -141,12 +139,12 @@ abstract module LucidBase {
          requires operatingAssumptions (e)
          ensures unchanged(this`queue) ensures unchanged(this`lastTime)
 
-      method generatePort(p : nat, e : Event) 
-         modifies this`forwarded, this`ports         
-         ensures forwarded == true
+      method generateOutput(p : nat, e : Event) 
+         modifies this`ports         
+         // ensures forwarded == true
          ensures ports == {p}
       {
-         forwarded := true;
+         // forwarded := true;
          ports := {p};
       }
 
@@ -301,4 +299,14 @@ module ParseUtils {
       (x % 256) as uint8
    }
 
+}
+
+module IntTypes {
+   // Integer types to use in executable code
+   type uint8  = x : nat | 0 <= x < 256
+   type uint16 = x : nat | 0 <= x < 65536
+   type uint20 = x : nat | 0 <= x < 1048576
+   type uint24 = x : nat | 0 <= x < 16777216
+   type uint32 = x : nat | 0 <= x < 4294967296
+   type uint48 = x : int | 0 <= x < 281474976710656
 }

@@ -97,7 +97,7 @@ class Program ... {
       else true
    }
 
-method dispatch (e: TimedEvent) returns (recirc: RecircCmd) 
+method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
    {  
       recirc := RecircCmd (false, Non());
       if {
@@ -118,7 +118,6 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
    method processPacket (ghost time: nat, timestamp: bits, dnsRequest: bool, 
                                 uniqueSig: nat) returns (recirc: RecircCmd)
       modifies this
-      requires forwarded == false // CHANGE
       requires timestamp == time % T
       requires parameterConstraints ()
       requires stateInvariant (time, timestamp)
@@ -165,14 +164,14 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
          bloomFilterInsert (uniqueSig);
          requestSet := requestSet + { uniqueSig };          // ghost update
       }
-      generatePort(1, ProcessPacket(true, uniqueSig)); // CHANGE
-      // forwarded := true;
+      forwarded := true;
+      generateOutput(1, thisEvent);
    }
 
    function interval (timestamp: bits): bits
       reads this
       requires parameterConstraints ()
-   {  timestamp / I } // implemented with a right-shift 
+   {  timestamp / I } // implemented with a right-shift
  
    function upperBoundedIncr (count: counter, unused: counter) : counter
    // this is a custom memcalc
@@ -191,7 +190,6 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
    method processReply (ghost time: nat, timestamp: bits, uniqueSig: nat) 
                                                 returns (recirc: RecircCmd)
       modifies this
-      requires forwarded == false // CHANGE
       requires timestamp == time % T
       // There must be a packet between any two interval rollovers, so
       // that interval boundaries can be detected.  Unfortunately, the
@@ -307,13 +305,14 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       if tmpFiltering && (timestamp - tmpTimestampOn) % T >= Q {
          filter (time, timestamp, uniqueSig);
       }
-      else {  generatePort(1, ProcessPacket(false, uniqueSig));  }// CHANGE
-      // else {  forwarded := true; }
+      else {  
+         forwarded := true; 
+         generateOutput(1, thisEvent);   
+      }
    }
 
    method filter (ghost time: nat, timestamp: bits, uniqueSig: nat) 
       modifies this
-      requires forwarded == false // CHANGE
       requires timestamp == time % T
       requires protectImplmnt (timestamp) 
       requires preRequestSet == requestSet
@@ -326,10 +325,17 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       ensures stateInvariant (time, timestamp)
       ensures unchanged(this`queue) ensures unchanged(this`lastTime)
    {
-      var do_forward := bloomFilterQuery (uniqueSig); // CHANGE
-      if do_forward {                 // if positive is false, has no effect
-         generatePort(1, ProcessPacket(false, uniqueSig)); // CHANGE
-         requestSet := requestSet - { uniqueSig };          // ghost update
+      /* CHANGE: Here, we want to generate an output only if the request
+         is in the set. The old code assigned the return of bloomFilterQuery
+         to forwarded. But that is a ghost variable, so we cannot use it 
+         to conditionally generate output. So, instead, we just assign 
+         the return of bloomFilterQuery to inSet and use that to conditionally
+         generate output and also assign forwarded. */
+      var inSet := bloomFilterQuery (uniqueSig);
+      forwarded := inSet;
+      if inSet {                 // if positive is false, has no effect
+         generateOutput(1, thisEvent);
+         requestSet := requestSet - { uniqueSig };          // ghost update         
       }
    }
 
@@ -401,4 +407,10 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
    // scheduled timeouts which can be delayed.
       ensures ! (uniqueSig in requestSet) ==> (! inSet)
 }
+
+class Parser ... {
+   
+}
+
+
 }
