@@ -25,7 +25,7 @@ module LucidProg refines LucidBase {
 
 class Program ... {
 
-   // Parameters
+   // Parameters 
    const I : bits := 16            // interval length, < T and a power of 2
    const Q : bits                              // maximum DNS response time
    const Roff : bits           // observation window for stopping filtering
@@ -39,8 +39,6 @@ class Program ... {
    ghost var timeOn : nat         // effective time filtering was turned on
    var timestampOn : StateVar <bits>            // implementation of timeOn
    ghost var requestSet : set <nat>      // pending requests, for filtering
-   ghost var forwarded: bool                        // fate of the current packet
-   var ports : set <nat>          // output ports where packet is forwarded
    ghost var actualTimeOn : nat          // actual time filtering turned on
    ghost var preRequestSet : set <nat>       // requestSet, before deletion
    var recircPending : StateVar <bool>   // a "semaphore" for recirculation
@@ -99,7 +97,7 @@ class Program ... {
       else true
    }
 
-method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
+method dispatch (e: TimedEvent) returns (recirc: RecircCmd) 
    {  
       recirc := RecircCmd (false, Non());
       if {
@@ -120,6 +118,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
    method processPacket (ghost time: nat, timestamp: bits, dnsRequest: bool, 
                                 uniqueSig: nat) returns (recirc: RecircCmd)
       modifies this
+      requires forwarded == false // CHANGE
       requires timestamp == time % T
       requires parameterConstraints ()
       requires stateInvariant (time, timestamp)
@@ -166,13 +165,14 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
          bloomFilterInsert (uniqueSig);
          requestSet := requestSet + { uniqueSig };          // ghost update
       }
-      forwarded := true;
+      generatePort(1, ProcessPacket(true, uniqueSig)); // CHANGE
+      // forwarded := true;
    }
 
    function interval (timestamp: bits): bits
       reads this
       requires parameterConstraints ()
-   {  bitShiftDivision(timestamp, I) } // implemented with a right-shift
+   {  timestamp / I } // implemented with a right-shift 
  
    function upperBoundedIncr (count: counter, unused: counter) : counter
    // this is a custom memcalc
@@ -191,6 +191,7 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
    method processReply (ghost time: nat, timestamp: bits, uniqueSig: nat) 
                                                 returns (recirc: RecircCmd)
       modifies this
+      requires forwarded == false // CHANGE
       requires timestamp == time % T
       // There must be a packet between any two interval rollovers, so
       // that interval boundaries can be detected.  Unfortunately, the
@@ -306,11 +307,13 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       if tmpFiltering && (timestamp - tmpTimestampOn) % T >= Q {
          filter (time, timestamp, uniqueSig);
       }
-      else {  forwarded := true; }
+      else {  generatePort(1, ProcessPacket(false, uniqueSig));  }// CHANGE
+      // else {  forwarded := true; }
    }
 
    method filter (ghost time: nat, timestamp: bits, uniqueSig: nat) 
       modifies this
+      requires forwarded == false // CHANGE
       requires timestamp == time % T
       requires protectImplmnt (timestamp) 
       requires preRequestSet == requestSet
@@ -323,8 +326,9 @@ method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
       ensures stateInvariant (time, timestamp)
       ensures unchanged(this`queue) ensures unchanged(this`lastTime)
    {
-      forwarded := bloomFilterQuery (uniqueSig);
-      if forwarded {                 // if positive is false, has no effect
+      var do_forward := bloomFilterQuery (uniqueSig); // CHANGE
+      if do_forward {                 // if positive is false, has no effect
+         generatePort(1, ProcessPacket(false, uniqueSig)); // CHANGE
          requestSet := requestSet - { uniqueSig };          // ghost update
       }
    }

@@ -24,15 +24,17 @@ REFINEMENT OF MEMORY ACCESSES
    """
 4. Change "time" and "lastTime" into ghost parameters, 
    since the implementation does not know the unbounded time.
-5. Added "bitShiftDivision" helper function to divide by a power of 2 in executable code
 
-[todo] N. Change event generation semantics. Now: 
-   - to generate a recirculation event, 
-      the program calls a "generate(event)" helper, 
-      rather than returning a recircCmd
+5. Use event generation to represent forwarding:
+   NOTE: this requires several small changes across the program. 
+         they are marked with "CHANGE" in comments.
    - to generate an output packet, i.e., forward, 
       the program calls a "generatePort(event)" helper, 
       rather than setting a "ports" variable.
+   - in the future, we can also use a similar approach for 
+     recirculation: to generate a recirculation event, 
+      the program calls a "generate(event)" helper, 
+      rather than returning a recircCmd through the dispatch method.
 
 [todo optional] N+1. Make timestamp a variable rather than passed in as an argument.
 */
@@ -53,13 +55,6 @@ module IntTypes {
       else if n % 2 != 0 then false
       else IsPowerOf2(n/2)
    }   
-   function bitShiftDivision(x: nat, i: nat): nat
-      // x / i, where i is a power of 2
-      requires IsPowerOf2(i)
-      ensures bitShiftDivision(x, i) == x / i
-   {
-      x / i
-   }
 }
 
 abstract module LucidBase {
@@ -71,11 +66,15 @@ abstract module LucidBase {
       TimedEvent (event: Event, ghost time: nat, timestamp: bits)
             
    datatype RecircCmd = RecircCmd (generate: bool, event: Event)
-
+   datatype OutputEvent = OutputEvent (event: Event, port: nat)
    class Program {
       const T : nat := 256               // number must match limit on bits
       var queue : seq <TimedEvent>
       ghost var lastTime : nat
+
+      ghost var forwarded: bool                        // fate of the current packet      
+      var ports : set <nat>          // output ports where packet is forwarded
+
 
       ghost predicate parameterConstraints ()          // define in program
          reads this
@@ -114,6 +113,7 @@ abstract module LucidBase {
 
       method pickNextEvent (q: seq <TimedEvent>)
          modifies this
+         requires forwarded == false // CHANGE
          requires validQueue (queue)
          requires |queue| > 0
          requires q == queue
@@ -134,11 +134,23 @@ abstract module LucidBase {
 
       method dispatch (e: TimedEvent) returns (recirc: RecircCmd)
          modifies this                                 // define in program
+         requires forwarded == false // CHANGE
          requires e.timestamp == e.time % T
          requires parameterConstraints ()
          requires stateInvariant (e.time, e.timestamp)
          requires operatingAssumptions (e)
          ensures unchanged(this`queue) ensures unchanged(this`lastTime)
+
+      method generatePort(p : nat, e : Event) 
+         modifies this`forwarded, this`ports         
+         ensures forwarded == true
+         ensures ports == {p}
+      {
+         forwarded := true;
+         ports := {p};
+      }
+
+
 
       method generateRecircEvent (e: Event) returns 
                                                   (recircEvent: TimedEvent)
