@@ -74,14 +74,13 @@ module LucidProg refines LucidBase {
       | SetFiltering (toWhat: bool)
       | Non ()
 
-   class Program ... { 
-
-      // Parameters
-      const I : uint8 := 16           // interval length, < T and a power of 2
-      const Q : uint8                             // maximum DNS response time
-      const Roff : uint8          // observation window for stopping filtering
-      const U : counter                               // upper count threshold
-      const L : counter                               // lower count threshold
+   class Globals ... {
+      // Parameters 
+      static const I : uint8 := 16           // interval length, < T and a power of 2
+      static const Q : uint8    := 10                         // maximum DNS response time
+      static const Roff : uint8  := 20        // observation window for stopping filtering
+      static const U : counter   := 2                            // upper count threshold
+      static const L : counter   := 1                            // lower count threshold
 
       // Address State
       var currentIntv : StateVar <uint8>                   // current interval
@@ -95,19 +94,15 @@ module LucidProg refines LucidBase {
       ghost var preRequestSet : set <nat>       // requestSet, before deletion
       var recircPending : StateVar <bool>   // a "semaphore" for recirculation
 
-      ghost predicate parameterConstraints ()           // from problem domain
-         {  Roff > I > 0 && Q > 0 && 0 < U < L < 1048576  }
 
-      constructor ()
-         // ensures parameterConstraints ()
-         ensures stateInvariant (0, 0, 0) 
+      constructor () 
+         ensures stateInvariant (0, 0, 0)  
       {
          filtering, recircPending := Atomic (false), Atomic (false);
          timeOn, actualTimeOn := 0, 0;
          currentIntv, timestampOn, count := Atomic(0), Atomic(0), Atomic(0);
          requestSet := {};
-      }
-
+      } 
       ghost predicate protecting (time: nat)  
          reads this
       {  filtering.val && (time - actualTimeOn) >= Q as nat  }
@@ -121,32 +116,67 @@ module LucidProg refines LucidBase {
          // Function satisfies specification because of mod arithmetic.
             ensures now >= origin ==> res == (now - origin)
             ensures now < origin ==>                        // 0 is T as uint8
-               res == (now + sys.T - origin)
-      {  (now - origin) % sys.T  }        // implemented as bit-vector subtraction
+               res == (now + Sys.T - origin)
+      {  (now - origin) % Sys.T  }        // implemented as bit-vector subtraction
 
-      ghost predicate stateInvariant (time: nat, timestamp: uint8, lastTime : nat)  
-      {  (  timestampOn.val == timeOn % sys.T  )
+      ghost predicate stateInvariant (time: nat, timestamp: uint8, lastTime : nat)
+      {  (  timestampOn.val == timeOn % Sys.T  )
       && (  actualTimeOn <= timeOn  )
       && (  timeOn <= time  )
       && (  (timeOn > actualTimeOn) ==> (time >= timeOn + Q as nat)  )
       && (  filtering.val ==> 
                (protecting (time) <==> protectImplmnt (timestamp)))
       && (  ! filtering.val ==> requestSet == {}  ) 
-      }  
+      }
+
+
+
+   }
+
+   class Program ... { 
+
+      // constructor ()
+      //    // ensures parameterConstraints ()
+      //    ensures globals.stateInvariant (0, 0, 0) 
+      // {
+      //    filtering, recircPending := Atomic (false), Atomic (false);
+      //    timeOn, actualTimeOn := 0, 0;
+      //    currentIntv, timestampOn, count := Atomic(0), Atomic(0), Atomic(0);
+      //    requestSet := {};
+      // } 
+
+      ghost predicate protecting (time: nat)  
+         reads this
+         reads globals
+      {  globals.filtering.val && (time - globals.actualTimeOn) >= globals.Q as nat  }
+
+      ghost predicate protectImplmnt (timestamp: uint8)
+         reads this
+         reads globals
+      {  globals.filtering.val && elapsedTime (timestamp, globals.timestampOn.val) >= globals.Q  }
+
+      function elapsedTime (now: uint8, origin: uint8): (res: uint8)
+         reads this
+         // Function satisfies specification because of mod arithmetic.
+            ensures now >= origin ==> res == (now - origin)
+            ensures now < origin ==>                        // 0 is T as uint8
+               res == (now + sys.T - origin)
+      {  (now - origin) % sys.T  }        // implemented as bit-vector subtraction
+
 
       ghost predicate operatingAssumptions (event: Event, time : nat, timestamp : uint8, lastTime:nat) 
       // There cannot be restrictions on recirculation events, i.e.,
       // SetFiltering events, because they were already chosen by the program.
       {
          if      event.ProcessPacket?
-         then       (filtering.val ==> time < actualTimeOn + sys.T) 
-               && (time - lastTime < sys.T - I              ) 
+         then       (globals.filtering.val ==> time < globals.actualTimeOn + Sys.T) 
+               && (time - lastTime < Sys.T - Globals.I              ) 
          else if event.SimulatedClockTick?
-         then    (filtering.val ==> (time + 1) < actualTimeOn + sys.T) 
+         then    (globals.filtering.val ==> (time + 1) < globals.actualTimeOn + Sys.T) 
          else true
-      }
+      }  
 
-      method dispatch (e : Event)
+      method dispatch (e : Event) 
          {  
             if {
                case e.ProcessPacket? => 
@@ -166,31 +196,32 @@ module LucidProg refines LucidBase {
 
       method processPacket (dnsRequest: bool, 
                                  uniqueSig: uint16)
-         modifies {this} - {this.sys} 
+         modifies globals
+         modifies this`generatedEvents
          requires generatedEvents == {}
          requires sys.timestamp == sys.time % sys.T
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         requires globals.parameterConstraints ()
+         requires globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          // There must be a packet between any two interval rollovers, so
          // that interval boundaries can be detected.  Unfortunately, the
          // specification is not strong enough to cause verification to fail
          // without this operating assumption.
-            requires sys.time - sys.lastTime < sys.T - I
+            requires sys.time - sys.lastTime < sys.T - globals.I
          // Below is the operating assumption to make attack time spans 
          // measurable.
-            requires filtering.val ==> sys.time < actualTimeOn + sys.T
+            requires globals.filtering.val ==> sys.time < globals.actualTimeOn + sys.T
          // The following is Adaptive Protection, can ONLY be verified when
          // the request set is implemented exactly.
          // Probabilistic Adaptive Protection means that Adaptive Protection
          // holds only in the likely cases where the positive from the Bloom
          // filter is true.
-         ensures forwarded ==>                          // Adaptive Protection
+         ensures globals.forwarded ==>                          // Adaptive Protection
                (  dnsRequest || ! protecting (sys.time)   
-               || uniqueSig in preRequestSet       )
-         ensures ! forwarded ==>
+               || uniqueSig in globals.preRequestSet       )
+         ensures ! globals.forwarded ==>
                (  ! dnsRequest && protecting (sys.time)
-               && ! (uniqueSig in preRequestSet)   )         // Harmlessness
-         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+               && ! (uniqueSig in globals.preRequestSet)   )         // Harmlessness
+         ensures globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures unchanged(this`sys)
 
       {
@@ -207,65 +238,67 @@ module LucidProg refines LucidBase {
       } 
 
       method processRequest (uniqueSig: uint16)
-         modifies this
+         modifies globals
          requires sys.timestamp == sys.time % sys.T
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
-         ensures forwarded
-         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         requires globals.parameterConstraints ()
+         requires globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures globals.forwarded
+         ensures globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures unchanged(this`sys)
       {
-         var tmpFiltering : bool := Get (filtering, nocalc, true);
+         var tmpFiltering : bool := Get (globals.filtering, nocalc, true);
          if tmpFiltering {
             bloomFilterInsert (uniqueSig);
-            requestSet := requestSet + { uniqueSig };          // ghost update
+            globals.requestSet := globals.requestSet + { uniqueSig };          // ghost update
          }
-         forwarded := true; 
+         globals.forwarded := true; 
       }
 
       function interval (timestamp: uint8): uint8
-         reads this
-         requires parameterConstraints ()
-      {  timestamp / I  }                    // implemented with a right-shift
+         reads this`globals
+         requires globals.parameterConstraints ()
+      {  timestamp / globals.I  }                    // implemented with a right-shift
    
       function upperBoundedIncr (count: counter, unused: counter) : counter
       // this is a custom memcalc
-      {  if count < U then (count + 1) else (count)  }
+      {  if count < Globals.U then (count + 1) else (count)  }
 
       function newTime (memVal: uint8, timestamp: uint8): uint8
       // this is a custom memcalc
-      {  if (timestamp - memVal) % Sys.T >= Q then (timestamp - Q) % Sys.T
+      {  if (timestamp - memVal) % Sys.T >= Globals.Q then (timestamp - Globals.Q) % Sys.T
          else memVal
       }
 
       ghost function creditedProtectingTime (time: nat) : int
-         reads this
-      {  time - (timeOn + Q)  }
+         reads this`globals
+         reads globals`timeOn
+      {  time - (globals.timeOn + Globals.Q)  }
 
       method processReply (uniqueSig: uint16)  
          returns (allowPacket : bool)
-         modifies this
+         modifies globals
+         modifies this`generatedEvents
          requires generatedEvents == {}
          requires sys.timestamp == sys.time % sys.T
          // There must be a packet between any two interval rollovers, so
          // that interval boundaries can be detected.  Unfortunately, the
          // specification is not strong enough to cause verification to fail
          // without this operating assumption.
-            requires sys.time - sys.lastTime < sys.T - I
+            requires sys.time - sys.lastTime < sys.T - globals.I
          // Operating assumption to make attack time spans measurable.
-            requires filtering.val ==> sys.time < actualTimeOn + sys.T
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)     
+            requires globals.filtering.val ==> sys.time < globals.actualTimeOn + sys.T
+         requires globals.parameterConstraints ()
+         requires globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)     
          // Adaptive Protection, requires exact request set
-            ensures forwarded ==>                 
-               (  ! protecting (sys.time) || uniqueSig in preRequestSet )
-         ensures ! forwarded ==>                               // Harmlessness
-               (  protecting (sys.time) && ! (uniqueSig in preRequestSet) ) 
-         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+            ensures globals.forwarded ==>                 
+               (  ! protecting (sys.time) || uniqueSig in globals.preRequestSet )
+         ensures ! globals.forwarded ==>                               // Harmlessness
+               (  protecting (sys.time) && ! (uniqueSig in globals.preRequestSet) ) 
+         ensures globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures unchanged(this`sys)
-      { 
+      {  
 
-         preRequestSet := requestSet;                          // ghost update
+         globals.preRequestSet := globals.requestSet;                          // ghost update
       // Changes to measurement state:
       // If an interval boundary has been crossed, save the count in
       // oldCount, and reset the counter to 1 (for this reply).  Otherwise
@@ -276,32 +309,37 @@ module LucidProg refines LucidBase {
          var oldCount : counter := 0;                               
          var tmpCurrentIntv : uint8;
          var tmpCount : counter;
-         tmpCurrentIntv, currentIntv := GetSet (
-            currentIntv, nocalc, 0, swapcalc, interval (sys.timestamp) );
+         tmpCurrentIntv, globals.currentIntv := GetSet (
+            globals.currentIntv, nocalc, 0, swapcalc, interval (sys.timestamp) );
          if interval (sys.timestamp) != tmpCurrentIntv {
-            oldCount, count := GetSet ( count, nocalc, 0, swapcalc, 1 );
+            oldCount,globals.count := GetSet ( globals.count, nocalc, 0, swapcalc, 1 );
             tmpCount := 1;
+         assert globals.count.val > 0;                                          
          }
          else {
-            tmpCount, count := GetSet (count, upperBoundedIncr, 0,
+            var oldCt := globals.count.val;
+            tmpCount, globals.count := GetSet (globals.count, upperBoundedIncr, 0,
                                              upperBoundedIncr, 0);
+            
+         assert globals.count.val > 0;                                          
+
          }
-         assert count.val > 0;                                          
-         assert (oldCount > 0) ==> (currentIntv.val != tmpCurrentIntv);
+         assert globals.count.val > 0;                                          
+         assert (oldCount > 0) ==> (globals.currentIntv.val != tmpCurrentIntv);
 
       // Changes to filtering state:
       // Turning filtering on:
       // Filtering is turned on as soon as count reaches upper threshold.
       // (Note that in !filtering test of count, it should never exceed U, so
       // this is defensive programming.)
-         var tmpFiltering : bool := Get (filtering, nocalc, true);
+         var tmpFiltering : bool := Get (globals.filtering, nocalc, true);
          var tmpTimestampOn : uint8;
          if ! tmpFiltering {
-            tmpTimestampOn := Get (timestampOn, nocalc, 0);
-            if tmpCount >= U { // time to turn filtering on
+            tmpTimestampOn := Get (globals.timestampOn, nocalc, 0);
+            if tmpCount >= globals.U { // time to turn filtering on
                var tmpRecircPending : bool;
-               tmpRecircPending, recircPending := GetSet (
-                  recircPending, nocalc, true, swapcalc, true);
+               tmpRecircPending, globals.recircPending := GetSet (
+                  globals.recircPending, nocalc, true, swapcalc, true);
                if ! tmpRecircPending {
                   generate(SetFiltering(true));
                }
@@ -309,8 +347,8 @@ module LucidProg refines LucidBase {
                else { } //recirc := RecircCmd (false, Non()); 
             }
             else { } // recirc := RecircCmd (false, Non()); 
-            assert count.val >= U ==>        // Attack Response (partial spec)
-                  (  recircPending.val 
+            assert globals.count.val >= globals.U ==>        // Attack Response (partial spec)
+                  (  globals.recircPending.val 
                   || generatedEvents == {Event(SetFiltering(true), {})});
             // assert count.val < U ==> generatedEvent == None();
          }
@@ -324,22 +362,22 @@ module LucidProg refines LucidBase {
       // filtering off until time Qroff elapses with no high counts.
          else { // filtering
             if oldCount > 0 { // interval boundary crossed
-               if oldCount >= L {
-                  ghost var oldTimestampOn := timestampOn.val;        // ghost
-                  tmpTimestampOn, timestampOn := GetSet (
-                     timestampOn, newTime, sys.timestamp, newTime, sys.timestamp);
+               if oldCount >= globals.L {
+                  ghost var oldTimestampOn := globals.timestampOn.val;        // ghost
+                  tmpTimestampOn, globals.timestampOn := GetSet (
+                     globals.timestampOn, newTime, sys.timestamp, newTime, sys.timestamp);
                   if oldTimestampOn != tmpTimestampOn { 
-                     timeOn := sys.time - Q;                       // ghost update
+                     globals.timeOn := sys.time - globals.Q;                       // ghost update
                   }
                   // recirc := RecircCmd (false, Non());
                }
                else { // oldCount < L
-                  tmpTimestampOn := Get (timestampOn, nocalc, 0);
-                  if (sys.timestamp - tmpTimestampOn) % sys.T >= Q + Roff {
+                  tmpTimestampOn := Get (globals.timestampOn, nocalc, 0);
+                  if (sys.timestamp - tmpTimestampOn) % sys.T >= globals.Q + globals.Roff {
                      // time to turn filtering off
                      var tmpRecircPending : bool;
-                     tmpRecircPending, recircPending := GetSet (
-                        recircPending, nocalc, true, swapcalc, true);
+                     tmpRecircPending, globals.recircPending := GetSet (
+                        globals.recircPending, nocalc, true, swapcalc, true);
                      if ! tmpRecircPending {
                         generate(SetFiltering(false));
                         // recirc := RecircCmd (true, SetFiltering(false));
@@ -351,90 +389,89 @@ module LucidProg refines LucidBase {
                // recirc := RecircCmd (false, Non());
                }
                assert                               // Modified Letup Response
-               creditedProtectingTime (sys.time) >= Roff as int ==> 
-                  (  recircPending.val 
+               creditedProtectingTime (sys.time) >= globals.Roff as int ==> 
+                  (  globals.recircPending.val 
                   || generatedEvents == {Event(SetFiltering(true), {})}); 
                   //recirc == RecircCmd (true, SetFiltering(true))  );
             }  // end of case where interval boundary crossed
-            else {  tmpTimestampOn := Get (timestampOn, nocalc, 0);}
+            else {  tmpTimestampOn := Get (globals.timestampOn, nocalc, 0);}
                   // recirc := RecircCmd (false, Non());           }
          }  // end of filtering case
 
       // Filtering decision:
-         if tmpFiltering && (sys.timestamp - tmpTimestampOn) % sys.T >= Q {
+         if tmpFiltering && (sys.timestamp - tmpTimestampOn) % sys.T >= globals.Q {
             allowPacket := filter (uniqueSig);
          }
-         else {  forwarded := true; allowPacket := true; }
+         else { globals.forwarded := true; allowPacket := true; }
       }
 
       method filter (uniqueSig: nat) 
          returns (allowPacket: bool)
-         modifies this
+         modifies globals
          requires sys.timestamp == sys.time % sys.T
          requires protectImplmnt (sys.timestamp)
-         requires preRequestSet == requestSet
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
-         ensures forwarded ==>  // Adaptive Protection, needs exact requestSet
-                              uniqueSig in preRequestSet
-         ensures ! forwarded ==> !(uniqueSig in preRequestSet) // Harmlessness
+         requires globals.preRequestSet == globals.requestSet
+         requires globals.parameterConstraints ()
+         requires globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures globals.forwarded ==>  // Adaptive Protection, needs exact requestSet
+                              uniqueSig in globals.preRequestSet
+         ensures ! globals.forwarded ==> !(uniqueSig in globals.preRequestSet) // Harmlessness
          ensures protecting (sys.time)
-         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures unchanged(this`sys)
       { 
          allowPacket := bloomFilterQuery (uniqueSig);
-         forwarded := allowPacket;
-         if forwarded {                 // if positive is false, has no effect
-            requestSet := requestSet - { uniqueSig };          // ghost update
+         globals.forwarded := allowPacket;
+         if globals.forwarded {                 // if positive is false, has no effect
+            globals.requestSet := globals.requestSet - { uniqueSig };          // ghost update
          }
       }
 
       method setFiltering (toWhat: bool)  
-         modifies this
+         modifies globals
          requires sys.timestamp == sys.time % sys.T
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         requires globals.parameterConstraints ()
+         requires globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures unchanged(this`sys)
-         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
       { 
-         filtering := Set (filtering, swapcalc, toWhat);
+         globals.filtering := Set (globals.filtering, swapcalc, toWhat);
          if toWhat {
-            timestampOn := Set (timestampOn, swapcalc, sys.timestamp);
-            timeOn := sys.time;                                    // ghost update
-            actualTimeOn := sys.time;                              // ghost update
+            globals.timestampOn := Set (globals.timestampOn, swapcalc, sys.timestamp);
+            globals.timeOn := sys.time;                                    // ghost update
+            globals.actualTimeOn := sys.time;                              // ghost update
          }
-         else {  requestSet := {}; }                           // ghost update
-         recircPending := Set (recircPending, swapcalc, false);
+         else {  globals.requestSet := {}; }                           // ghost update
+         globals.recircPending := Set (globals.recircPending, swapcalc, false);
       }
 
       method simulatedHardwareFailure ()    // ghost
-         modifies {this} - {this.sys}
+         modifies globals
          requires sys.timestamp == sys.time % sys.T
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         requires globals.parameterConstraints ()
+         requires globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          ensures unchanged(this`sys)
-         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
       {
-         filtering, recircPending := Atomic (false), Atomic (false);
-         timeOn, actualTimeOn := 0, 0;
-         currentIntv, timestampOn, count := Atomic(0), Atomic(0), Atomic(0);
-         requestSet := {};
+         globals.filtering, globals.recircPending := Atomic (false), Atomic (false);
+         globals.timeOn, globals.actualTimeOn := 0, 0;
+         globals.currentIntv, globals.timestampOn, globals.count := Atomic(0), Atomic(0), Atomic(0);
+         globals.requestSet := {};
       }  
 
       method simulatedClockTick ()          // ghost
-         modifies {this} - {this.sys}
          requires sys.timestamp == sys.time % sys.T
-         requires parameterConstraints ()
-         requires stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         requires globals.parameterConstraints ()
+         requires globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
          // Operating assumption to make attack time spans measurable.  
          // Without the "+ 1", the method cannot be verified.
-            requires filtering.val ==> (sys.time + 1) < actualTimeOn + sys.T
+            requires globals.filtering.val ==> (sys.time + 1) < globals.actualTimeOn + sys.T
          ensures unchanged(this`sys)
-         ensures stateInvariant (sys.time, sys.timestamp, sys.lastTime)
+         ensures globals.stateInvariant (sys.time, sys.timestamp, sys.lastTime)
       { 
          var timePlus : nat := sys.time + 1;
          var timestampPlus : uint8 := (sys.timestamp + 1) % sys.T;
-         assert stateInvariant (timePlus, timestampPlus, sys.lastTime);
+         assert globals.stateInvariant (timePlus, timestampPlus, sys.lastTime);
       }
 
       method {:extern}{:axiom} bloomFilterInsert (uniqueSig: nat)
@@ -447,7 +484,7 @@ module LucidProg refines LucidBase {
       // this would be a source of false negatives.  However, it is not,
       // because a request never needs to stay in the set longer than Q,
       // where Q <= W.
-         ensures uniqueSig in requestSet ==> inSet
+         ensures uniqueSig in globals.requestSet ==> inSet
       // No false positives:
       // Not true, but used to prove Adaptive Protection as a sanity
       // check.  (If deleted, Adaptive Protection cannot be proved.)  This
@@ -455,7 +492,7 @@ module LucidProg refines LucidBase {
       // a Bloom filter to yield false positives sometimes; (2) in a
       // sliding-window Bloom filter, there are no timely deletions, just
       // scheduled timeouts which can be delayed.
-         ensures ! (uniqueSig in requestSet) ==> (! inSet)
+         ensures ! (uniqueSig in globals.requestSet) ==> (! inSet)
    }
 
 
