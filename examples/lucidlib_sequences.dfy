@@ -1,175 +1,278 @@
 /* Experimenting with traits and classes to represent handlers */
 
-// An event is a datatype / record
-datatype Event = 
-    | a(x : int)
-    | b(y : int)
-{
+abstract module Lucid {
+    type Event(==) 
+    predicate unreachable() { false }
+
+    // random nat between s and e, but really just s.
+    method rand(s : nat, e : nat) returns (rv : nat)
+        requires s < e
+        ensures s <= rv < e
+    {
+        return s;
+    }
+
+    class Program {
+        // library / base class code
+        var curTime : nat
+        var recircEvents : map<nat, Event>
+        var handledEvents : map<nat, Event>
+        const TRecirc : nat := 1 // recirc delay
+
+        predicate init_state()
+            reads this`curTime
+            reads this`recircEvents
+            reads this`handledEvents
+        {
+            curTime == 0 && recircEvents == map[] && handledEvents == map[]
+        }
+        constructor () 
+        ensures init_state()
+        {
+            curTime := 0;
+            recircEvents := map[];
+            handledEvents := map[];
+        }        
+
+        method generate(e : Event) 
+            modifies this`recircEvents
+            requires !(curTime + TRecirc in recircEvents)
+            ensures recircEvents == old(recircEvents[(curTime + TRecirc) := e])
+        {
+            recircEvents := recircEvents[(curTime + TRecirc) := e];
+        }
+
+        predicate freeTimeSlot() 
+            reads this`curTime, this`handledEvents
+        {
+            !(curTime in handledEvents)
+        }
+
+        predicate noDueRecircs() 
+            reads this`curTime, this`recircEvents
+        {
+            !(exists t :: (t <= curTime) && (t in recircEvents)) // there are no pending recirc events scheduled before or at this time
+        }
+        predicate noLateRecircs() 
+            reads this`curTime, this`recircEvents
+        {
+            !(exists t :: (t < curTime) && (t in recircEvents)) // there are no pending recirc events scheduled before this time
+        }
+
+        predicate validArrival(e : Event) 
+            reads this`curTime, this`recircEvents, this`handledEvents
+        {
+            noLateRecircs()
+            && (curTime in recircEvents ==> recircEvents[curTime] == e) // if there's an event at this time, its e
+            && freeTimeSlot()
+            && noFutureEventsHandled()
+        }
+
+        predicate canGenerate()
+            reads this`curTime, this`recircEvents
+        {
+            !(curTime + TRecirc in recircEvents)
+        }
+
+        twostate predicate generated(e : Event) 
+            reads this`recircEvents, this`curTime
+        {
+            recircEvents == (old(recircEvents) - {curTime})[curTime + TRecirc := e]
+        }
+       twostate predicate nothing_generated()
+           reads this`recircEvents
+        {            
+            recircEvents == old(recircEvents)
+        }
+
+        // the event is handled... so set it in handledevents
+        predicate handled(e : Event)
+            reads this`handledEvents, this`curTime
+        {
+                curTime in handledEvents 
+            &&  handledEvents[curTime] == e
+            && noFutureEventsHandled()
+        }
+        twostate predicate handled_recirc(e : Event)
+            reads this`recircEvents, this`curTime, this`handledEvents
+        {
+            // curTime in old(recircEvents) ==>
+            handled(e)
+            && recircEvents == old(recircEvents) - {curTime}
+        }
+
+        predicate noFutureEventsHandled()
+            reads this`handledEvents, this`curTime
+        {
+            !(exists t :: t in handledEvents && t > curTime)
+        }
+
+        // builtin. Do a clock tick, maintaining the given invariant
+        method clockTick()
+            modifies this`curTime
+            requires noFutureEventsHandled()
+            requires noDueRecircs()
+            ensures curTime == old(curTime + 1)
+            ensures noLateRecircs()
+            ensures noFutureEventsHandled()
+        {
+            curTime := curTime + 1;
+        }
+
+        method finish(e : Event)
+            modifies    this`handledEvents, this`recircEvents
+            requires    freeTimeSlot()
+            requires     noLateRecircs()
+            requires    noFutureEventsHandled()
+            ensures     noFutureEventsHandled()
+            ensures     noLateRecircs()
+            ensures     handledEvents == old(handledEvents)[curTime := e]
+            ensures     !(curTime in recircEvents)
+            ensures     recircEvents == old(recircEvents) - {curTime}
+        {
+            recircEvents := recircEvents - {curTime};
+            handledEvents := handledEvents[curTime := e];
+        }
+
+        // get the next recirculated event
+        method getNextEvent() returns (e : Event)
+            requires curTime in recircEvents 
+            ensures e == recircEvents[curTime]
+        {
+            return recircEvents[curTime];        
+        }
+
+
+        // to prove properties about infinite sequences, 
+        // use this loop invariant to make sure the sequence is well-formed
+        predicate loopInvariant() 
+            reads this`curTime, this`recircEvents, this`handledEvents
+        {
+            noLateRecircs()
+            && noFutureEventsHandled()
+            && forall t :: t in recircEvents ==> t < curTime
+        }
+
+    }
 }
 
-// // oh.. a subset of events... hmm... 
-// type A = e: Event | e.a? witness *
-// type B = e: Event | e.b? witness *
 
+class Test {
 
-class Program {        
-    // trait / base class code
-    var curTime : nat
-    var recircEvents : map<nat, Event>
-    var handledEvents : map<nat, Event>
-    const TRecirc : nat := 1 // recirc delay
+    var foo : nat
 
-    method generate(e : Event) 
-        modifies this`recircEvents
-        requires !(curTime + TRecirc in recircEvents)
-        ensures recircEvents == old(recircEvents[(curTime + TRecirc) := e])
+    twostate predicate Bar_postcondition()
+        reads this`foo
     {
-        recircEvents := recircEvents[(curTime + TRecirc) := e];
+        foo == old(foo) + 1 // problem: old(foo) is not defined.
+                            // we could pass it as an argument, but I'd rather not. 
+                            // question: is there a cleaner way to do this?
     }
 
-    predicate freeTimeSlot(curTime : nat, handledEvents : map<nat, Event>) {
-        !(curTime in handledEvents)
-    }
-
-    predicate noDueRecircs(curTime : nat, recircEvents : map<nat, Event>) {
-        !(exists t :: (t <= curTime) && (t in recircEvents)) // there are no pending recirc events scheduled before or at this time
-    }
-    predicate noLateRecircs(curTime : nat, recircEvents : map<nat, Event>) {
-        !(exists t :: (t < curTime) && (t in recircEvents)) // there are no pending recirc events scheduled before this time
-    }
-
-    predicate validArrival(curTime : nat, recircEvents : map<nat, Event>, handledEvents : map<nat, Event>, e : Event) {
-        noLateRecircs(curTime, recircEvents)
-        && (curTime in recircEvents ==> recircEvents[curTime] == e) // if there's an event at this time, its e
-        && freeTimeSlot(curTime, handledEvents)
-        && noFutureEventsHandled(handledEvents, curTime)
-    }
-
-    predicate canGenerate(curTime : nat, recircEvents : map<nat, Event>)
+    method Bar() 
+        modifies this`foo
+        ensures foo == old(foo) + 1
+        // Goal: write "ensures Bar_postcondition()" instead of the above
     {
-        !(curTime + TRecirc in recircEvents)
+        foo := foo + 1;
     }
 
-    predicate didGenerate(oldRecircEvents : map<nat, Event>, recircEvents : map<nat, Event>, curTime : nat, e : Event) 
+}
+
+module MyProg refines Lucid {
+    // Define events
+    datatype Event = 
+        | a(x : int)
+        | b(y : int)
+    // Define handles and state
+    class Program ...{      
+        var counter : nat
+        constructor () 
+        ensures counter == 0
+        {
+            counter := 0;
+        }
+
+        method A(x : int)
+            modifies this`recircEvents, this`handledEvents         
+            requires validArrival(a(x)) // handling the event that just arrived
+            requires canGenerate()      // there is room in the recirculation buffer to generate an event that arrives at a specific time
+            ensures  handled(a(x))      // we have finished handling the event
+            ensures  generated(b(x))    // we have generated a recirculation event
+        {
+            generate(b(x));        
+            finish(a(x));
+        }
+        method B(x : int)
+            modifies this`handledEvents, this`recircEvents, this`counter
+            requires validArrival(b(x))
+            ensures handled_recirc(b(x))
+            ensures counter == old(counter) + 1
+        {  
+            counter := counter + 1;
+            finish(b(x));
+        }
+    }    
+
+    // prove things about finite sequences
+    // for example: running A(10) and then B(10) increments the counter
+    method A_counts_on_recirc(p : Program) 
+        modifies p
+        requires p.init_state()
+        requires p.counter == 0
+        ensures p.counter == 1
     {
-        recircEvents == oldRecircEvents[curTime + TRecirc := e]
+        p.A(10);
+        p.clockTick();
+        assert p.counter == 0; // just for fun
+        var recirculated_event := p.getNextEvent();
+        match recirculated_event { case b(arg) => p.B(arg); }
+        assert p.counter == 1; // verify post-condition, not necessary though.
     }
-    predicate noGenerate(oldRecircEvents : map<nat, Event>, recircEvents : map<nat, Event>)
+
+    // prove things about infinite sequences constructed with standard imperative constructs
+    // for example: in any infinite sequence of A(1) followed by handling the generated recirc event, followed by a 
+    // random wait, the counter will equal the number of times the sequence has completed.
+    method A_counts_on_recirc_forever() 
+        decreases *
     {
-        recircEvents == oldRecircEvents
-    }
-
-    predicate noFutureEventsHandled(handledEvents : map<nat, Event>, curTime : nat)
-    {
-        !(exists t :: t in handledEvents && t > curTime)
-    }
-
-    // builtin. Do a clock tick without changing anything else.
-    method clockTick()
-        modifies this`curTime
-        requires noFutureEventsHandled(handledEvents, curTime)
-        requires noDueRecircs(curTime, recircEvents)
-        ensures curTime == old(curTime + 1)
-        ensures noLateRecircs(curTime, recircEvents)
-        ensures noFutureEventsHandled(handledEvents, curTime)
-    {
-        curTime := curTime + 1;
-    }
-
-    // the event is handled... so set it in handledevents
-    predicate handled(handledEvents : map<nat, Event>, curTime : nat, e : Event)
-    {
-            curTime in handledEvents 
-        &&  handledEvents[curTime] == e
-        && noFutureEventsHandled(handledEvents, curTime)
-    }
-    method finish(e : Event)
-        modifies    this`handledEvents, this`recircEvents
-        requires    freeTimeSlot(curTime, handledEvents)
-        requires     noLateRecircs(curTime, recircEvents)
-        requires    noFutureEventsHandled(handledEvents, curTime)
-        ensures     noFutureEventsHandled(handledEvents, curTime)
-        ensures     noLateRecircs(curTime, recircEvents)
-        ensures     handledEvents == old(handledEvents)[curTime := e]
-        ensures     !(curTime in recircEvents)
-        ensures     recircEvents == old(recircEvents) - {curTime}
-
-    {
-        recircEvents := recircEvents - {curTime};
-        handledEvents := handledEvents[curTime := e];
-    }
-
-    // get the next recirculation event
-    method getNextEvent() returns (e : Event)
-        requires curTime in recircEvents 
-        ensures e == recircEvents[curTime]
-    {
-        return recircEvents[curTime];        
-    }
-
-    // User code
-    constructor () 
-    ensures curTime == 0
-    ensures recircEvents == map[]
-    ensures handledEvents == map[]
-    {
-        curTime := 0;
-        recircEvents := map[];
-        handledEvents := map[];
-    }
-
-    // user handlers
-    method A(x : int)
-        modifies this`recircEvents, this`handledEvents         
-        // requires noFutureEventsHandled(handledEvents, curTime)
-        requires validArrival(curTime, recircEvents, handledEvents, a(x)) // the event that this handler represents is valid to arrive next
-        // ensures old(recircEvents) == recircEvents
-        requires canGenerate(curTime, recircEvents) // There is a free slot in the generate
-        ensures  didGenerate(old(recircEvents) - {curTime}, recircEvents, curTime, b(x+1)) // effect  state
-        ensures handled(handledEvents, curTime, a(x))
-    {
-        generate(b(x+1));        
-        finish(a(x));
-    }
-
-    method B(x : int)
-        modifies this`handledEvents, this`recircEvents
-        requires validArrival(curTime, recircEvents, handledEvents, b(x)) // the event that this handler represents is valid to arrive next
-        requires canGenerate(curTime, recircEvents) // There is a free slot in the generate
-        ensures handled(handledEvents, curTime, b(x))
-        ensures recircEvents == (old(recircEvents) - {curTime})
-        ensures noDueRecircs(curTime, recircEvents)
-    {  
-        finish(b(x));
-
+        var p := new Program();
+        var nLoops : nat := 0;
+        while true
+            decreases *
+            invariant p.loopInvariant()    // the program's queue state is maintained at every loop start
+            invariant p.validArrival(a(1)) // the first event in the loop has just arrived
+            invariant p.counter == nLoops // the interesting program-specific invariant -- the counter counts the number of b events
+        {
+            p.A(1);
+            p.clockTick();
+            var recirculated_event := p.getNextEvent();
+            match recirculated_event { case b(arg) => p.B(arg); }
+            p.clockTick();
+            var cur_counter := p.counter;
+            var n_ticks_to_wait := rand(1, 10); 
+            // wait some more random time, in another loop
+            while n_ticks_to_wait > 0
+                decreases n_ticks_to_wait
+                invariant p.loopInvariant()
+                invariant p.validArrival(a(1))
+                invariant p.counter == cur_counter
+            {
+                p.clockTick();
+                n_ticks_to_wait := n_ticks_to_wait - 1;
+            }
+            // increment loop counteer
+            nLoops := nLoops + 1;
+        }
     }
 }
 
 
-predicate unreachable() { false }
 
-method test_recirc() {
-    var p := new Program();
-    p.A(10);
-    p.clockTick();
-    var recirculated_event := p.getNextEvent();
-    match recirculated_event { case b(arg) => p.B(arg); }
-    p.clockTick();
-    p.clockTick();
-    p.clockTick();
-    p.A(10);
-    p.clockTick();
-    recirculated_event := p.getNextEvent();
-    match recirculated_event { case b(arg) => p.B(arg); }
-}
 
-method test_seq() {
-    var p := new Program();
-    p.B(11);
-    p.clockTick();
-    p.clockTick();
-    p.B(11);
-}
+
+
+
 
 
 
