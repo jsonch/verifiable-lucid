@@ -99,6 +99,14 @@ class Program {
         handledEvents := handledEvents[curTime := e];
     }
 
+    // get the next recirculation event
+    method getNextEvent() returns (e : Event)
+        requires curTime in recircEvents 
+        ensures e == recircEvents[curTime]
+    {
+        return recircEvents[curTime];        
+    }
+
     // User code
     constructor () 
     ensures curTime == 0
@@ -133,24 +141,26 @@ class Program {
         ensures noDueRecircs(curTime, recircEvents)
     {  
         finish(b(x));
-        
+
     }
-
-    // method handle(e: Event) { }
-
 }
 
 
-// This is decent. 
-// The thing remaining is somehow getting the 
+predicate unreachable() { false }
 
 method test_recirc() {
     var p := new Program();
     p.A(10);
     p.clockTick();
-    p.B(11);
+    var recirculated_event := p.getNextEvent();
+    match recirculated_event { case b(arg) => p.B(arg); }
+    p.clockTick();
+    p.clockTick();
     p.clockTick();
     p.A(10);
+    p.clockTick();
+    recirculated_event := p.getNextEvent();
+    match recirculated_event { case b(arg) => p.B(arg); }
 }
 
 method test_seq() {
