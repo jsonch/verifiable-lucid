@@ -59,7 +59,7 @@ abstract module Lucid {
             !(exists t :: (t < curTime) && (t in recircEvents)) // there are no pending recirc events scheduled before this time
         }
 
-        predicate validArrival(e : Event) 
+        predicate nextEvent(e : Event) 
             reads this`curTime, this`recircEvents, this`handledEvents
         {
             noLateRecircs()
@@ -93,10 +93,9 @@ abstract module Lucid {
             &&  handledEvents[curTime] == e
             && noFutureEventsHandled()
         }
-        twostate predicate handled_recirc(e : Event)
+        twostate predicate handledRecirc(e : Event)
             reads this`recircEvents, this`curTime, this`handledEvents
         {
-            // curTime in old(recircEvents) ==>
             handled(e)
             && recircEvents == old(recircEvents) - {curTime}
         }
@@ -179,34 +178,39 @@ class Test {
 
 }
 
-module MyProg refines Lucid {
+module ExampleProg refines Lucid {
     // Define events
     datatype Event = 
         | a(x : int)
         | b(y : int)
-    // Define handles and state
-    class Program ...{      
+
+    // Define handles and state in the "Program" class
+    class Program ... {      
         var counter : nat
         constructor () 
         ensures counter == 0
         {
             counter := 0;
         }
-
+        // Translation rule: method A(x) is the handler for event a(x)        
         method A(x : int)
             modifies this`recircEvents, this`handledEvents         
-            requires validArrival(a(x)) // handling the event that just arrived
+            requires nextEvent(a(x))    // handling the event that just arrived
             requires canGenerate()      // there is room in the recirculation buffer to generate an event that arrives at a specific time
             ensures  handled(a(x))      // we have finished handling the event
             ensures  generated(b(x))    // we have generated a recirculation event
         {
-            generate(b(x));        
+            generate(b(x));   
             finish(a(x));
         }
         method B(x : int)
             modifies this`handledEvents, this`recircEvents, this`counter
-            requires validArrival(b(x))
-            ensures handled_recirc(b(x))
+            requires nextEvent(b(x))
+            ensures handledRecirc(b(x)) 
+                // Minor question: can we combine handled and handledRecirc?
+                // Something like, if the event is in recircEvents at the current time, 
+                // it is removed from recircEvents. 
+                // Not sure why it wasn't working last night. Seems simple.
             ensures counter == old(counter) + 1
         {  
             counter := counter + 1;
@@ -224,10 +228,11 @@ module MyProg refines Lucid {
     {
         p.A(10);
         p.clockTick();
-        assert p.counter == 0; // just for fun
-        var recirculated_event := p.getNextEvent();
-        match recirculated_event { case b(arg) => p.B(arg); }
+        assert p.counter == 0; // check something about program state
+        var recirculated_event := p.getNextEvent(); // get the recirculated event, fails if there is none.
+        match recirculated_event { case b(arg) => p.B(arg); } // destruct and handle the recirculated event.
         assert p.counter == 1; // verify post-condition, not necessary though.
+
     }
 
     // prove things about infinite sequences constructed with standard imperative constructs
@@ -241,7 +246,7 @@ module MyProg refines Lucid {
         while true
             decreases *
             invariant p.loopInvariant()    // the program's queue state is maintained at every loop start
-            invariant p.validArrival(a(1)) // the first event in the loop has just arrived
+            invariant p.nextEvent(a(1)) // the next event to be processed is a(1)
             invariant p.counter == nLoops // the interesting program-specific invariant -- the counter counts the number of b events
         {
             p.A(1);
@@ -255,7 +260,7 @@ module MyProg refines Lucid {
             while n_ticks_to_wait > 0
                 decreases n_ticks_to_wait
                 invariant p.loopInvariant()
-                invariant p.validArrival(a(1))
+                invariant p.nextEvent(a(1))
                 invariant p.counter == cur_counter
             {
                 p.clockTick();
@@ -265,43 +270,17 @@ module MyProg refines Lucid {
             nLoops := nLoops + 1;
         }
     }
+
+    // Next step: 
+    // Diagram the architectural model and how the invariants fit in.
+
+
 }
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-/* What do you need to define along with each event? 
-
-    1. A handler. A state -> state transformation function. 
-    2. A pre-condition and post-condition on the state. 
-*/
-
-
-
-
-
-
-
-
-
-// module Prog refines Lucid {
-//     type Event = 
-//         | 
-// }
 
 
 module LucidTypes {
