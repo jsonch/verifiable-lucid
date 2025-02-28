@@ -156,7 +156,7 @@ abstract module VerifiableLucid {
             emittedEvents := emittedEvents[(p, curTime) := e];
         }
         // condition that an event was emitted to a port at the current time.
-        twostate predicate emits(p : nat, e : Event)
+        twostate predicate emitted(p : nat, e : Event)
             reads this`emittedEvents, this`curTime
         {
                (p, curTime) in emittedEvents 
@@ -291,7 +291,7 @@ abstract module VerifiableLucid {
             }
 
         // event arrived from anywhere
-        predicate arrival(e : Event) 
+        predicate arrived(e : Event) 
             reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime
             {
                 canUseCurrentClock() &&

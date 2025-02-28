@@ -15,10 +15,10 @@ class Program ... {
 
     method A(x : uint32) 
         modifies this`recircQueue, this`trace, this`emittedEvents
-        requires networkArrival(a(x)) // where does it come from -- the network
-        ensures  generated(b(x))      // what does it do: generates an event
-        ensures  finished(a(x))       // what does it do: finishes processing an event
-        ensures  emits(1, a(x))
+        requires arrived(a(x))
+        ensures  finished(a(x))       
+        ensures  generated(b(x))      
+        ensures  emitted(1, a(x))
     {
         generate(b(x));
         generate_port(1, a(x));
@@ -27,7 +27,7 @@ class Program ... {
 
     method B(y : uint32)
         modifies this`recircQueue, this`trace
-        requires recircArrival(b(y))
+        requires arrived(b(y))
         ensures  finished(b(y))
     {
         finish(b(y));        
