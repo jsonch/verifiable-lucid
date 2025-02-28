@@ -107,18 +107,10 @@ module Arr {
     function  swapcalc<t> (oldVal: t, newArg: t) : t {  newArg  }
 }
 
-
-abstract module VerifiableLucid {
-
+module Helpers {
     datatype Opt<t> = 
-        | None()
-        | Some(v : t)
-
-
-    import opened LucidTypes
-    import opened Arr
-    type Event(==) 
-    predicate unreachable() { false }
+    | None()
+    | Some(v : t)
 
     // random nat between s and e, but really just s.
     method rand(s : nat, e : nat) returns (rv : nat)
@@ -127,9 +119,15 @@ abstract module VerifiableLucid {
     {
         return s;
     }
+}
 
-    class Program {
+abstract module VerifiableLucid {
+    import opened LucidTypes
+    import opened Arr
+    import opened Helpers
 
+
+    trait SwitchRuntime {
         const TRecirc : nat := 1 // recirc delay
 
         var recircQueue : seq<(nat, Event)> // earliest possible arrival time, Event
@@ -139,22 +137,6 @@ abstract module VerifiableLucid {
         var curTime : nat
 
         var generatedEvent : Opt<Event>
-
-        constructor ()
-            ensures recircQueue == []
-            ensures curTime == 0
-            ensures trace == map[]
-            ensures handlingRecirc == false
-            ensures emittedEvents == map[]
-            ensures generatedEvent == None()
-        {
-            recircQueue := [];
-            trace := map[];
-            curTime := 0;
-            handlingRecirc := false;
-            emittedEvents := map[];
-            generatedEvent := None();
-        }
 
         // generate an event to a port
         method generate_port(p : nat, e : Event)
@@ -287,6 +269,28 @@ abstract module VerifiableLucid {
             reads this`recircQueue, this`handlingRecirc, this`curTime
         {
             (|recircQueue| > 0) && (recircQueue[0].1 == e) && (recircQueue[0].0 <= curTime)
+        }
+    }
+
+    type Event(==) 
+    class Program extends SwitchRuntime {
+
+        // The base constructor just initializes 
+        // everything from the switch runtime
+        constructor ()
+            ensures recircQueue == []
+            ensures curTime == 0
+            ensures trace == map[]
+            ensures handlingRecirc == false
+            ensures emittedEvents == map[]
+            ensures generatedEvent == None()
+        {
+            recircQueue := [];
+            trace := map[];
+            curTime := 0;
+            handlingRecirc := false;
+            emittedEvents := map[];
+            generatedEvent := None();
         }
 
     }
