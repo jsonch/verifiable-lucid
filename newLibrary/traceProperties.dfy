@@ -17,10 +17,10 @@ class Program ... {
         modifies this`generatedEvent
         modifies this`emittedEvents
         modifies this`trace
-        requires arrived(a(x))
-        ensures  generated(b(x))      
-        ensures  emitted(1, a(x))
-        ensures  recorded(a(x))
+        requires readyToHandle(a(x))
+        ensures  generates(b(x))      
+        ensures  emits(1, a(x))
+        ensures  records(a(x))
     {
         generate(b(x));
         generate_port(1, a(x)); 
@@ -29,8 +29,8 @@ class Program ... {
 
     method B(y : uint32)
         modifies this`trace
-        requires arrived(b(y))
-        ensures  recorded(b(y))
+        requires readyToHandle(b(y))
+        ensures  records(b(y))
     {
         record(b(y));
     }    

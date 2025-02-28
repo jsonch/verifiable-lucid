@@ -169,7 +169,7 @@ abstract module VerifiableLucid {
             emittedEvents := emittedEvents[(p, curTime) := e];
         }
         // condition that an event was emitted to a port at the current time.
-        twostate predicate emitted(p : nat, e : Event)
+        twostate predicate emits(p : nat, e : Event)
             reads this`emittedEvents, this`curTime
         {
                (p, curTime) in emittedEvents 
@@ -178,7 +178,7 @@ abstract module VerifiableLucid {
         }
 
         // recirculation event generation
-        twostate predicate generated(e : Event) 
+        twostate predicate generates(e : Event) 
             reads this`generatedEvent
         {
             generatedEvent == Some(e)
@@ -244,7 +244,7 @@ abstract module VerifiableLucid {
         }
 
 
-        twostate predicate recorded(e : Event)
+        twostate predicate records(e : Event)
             reads this`trace
             reads this`curTime
         {
@@ -252,7 +252,7 @@ abstract module VerifiableLucid {
         }
         method record(e : Event) 
             modifies this`trace
-            ensures recorded(e)
+            ensures records(e)
         {
             trace := trace[curTime := e];
         }
@@ -268,33 +268,33 @@ abstract module VerifiableLucid {
         predicate recircArrival(e : Event) 
             reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime, this`generatedEvent
             {
-                generatedEvent == None() &&
-                canUseCurrentClock() &&
-                handlingRecirc
-                && (
-                    (|recircQueue| > 0) && (recircQueue[0].1 == e) && (recircQueue[0].0 <= curTime)
-                )
+                generatedEvent == None() 
+                && canUseCurrentClock() 
+                && handlingRecirc
+                && isNextRecircEvent(e)
             }
 
-        // aevent rrived from non recirc
+        // event arrived from non recirc
         predicate networkArrival(e : Event) 
             reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime
             {
-                canUseCurrentClock() &&
-                !handlingRecirc
+                canUseCurrentClock() 
+                && !handlingRecirc
             }
 
+        predicate isNextRecircEvent(e : Event) 
+            reads this`recircQueue, this`handlingRecirc, this`curTime
+        {
+            (|recircQueue| > 0) && (recircQueue[0].1 == e) && (recircQueue[0].0 <= curTime)
+        }
+
         // event arrived from anywhere
-        predicate arrived(e : Event) 
+        predicate readyToHandle(e : Event) 
             reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime, this`generatedEvent
             {
                 generatedEvent == None() &&
                 canUseCurrentClock() &&
-                if (handlingRecirc) then (
-                    (|recircQueue| > 0) && (recircQueue[0].1 == e) && (recircQueue[0].0 <= curTime)
-                ) else (
-                    true
-                )
+                (handlingRecirc ==> isNextRecircEvent(e))
             }
     }
 }
