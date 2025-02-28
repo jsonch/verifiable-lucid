@@ -50,10 +50,6 @@ method traceTest()
         p.A(1);
         p.clockTick();
         assert |p.recircQueue| == 2;
-        // assert p.recircQueue[1].1 == b(1);
-
-        // // I know there's a recirc event waiting. And its a b. So call it. 
-        // p.B(1);
         var nextEvent := p.nextRecirc();
         match nextEvent {case b(x) => p.B(x);} // the verifier knows that the event is a b!
         assert p.recircQueue[0].1 == b(1);
@@ -67,7 +63,6 @@ method traceTest()
         assert 0 !in p.trace;
         assert p.trace[3] == a(1);
         assert p.trace[4] == b(1);
-        // assert p.trace[4] == b(1);
     }
 
 }

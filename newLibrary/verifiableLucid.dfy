@@ -34,7 +34,6 @@ module LucidTypes {
     function to_uint32(x : int) : uint32
         ensures to_uint32(x) == x % max32
     { x % max32 }
-
 }
 
 module Arr {
@@ -110,6 +109,7 @@ module Arr {
 
 
 abstract module VerifiableLucid {
+
     datatype Opt<t> = 
         | None()
         | Some(v : t)
@@ -139,11 +139,6 @@ abstract module VerifiableLucid {
         var curTime : nat
 
         var generatedEvent : Opt<Event>
-        // TODO: use generatedEvent, so that the handlers don't have 
-        // to touch the recircQueue.
-        // TODO: remove the dequeue from the ensures.
-        // TODO: make clockTick enqueue of generated event.
-        // TODO: make clockTick dequeue the recirculated event, if it has been processed.
 
         constructor ()
             ensures recircQueue == []
@@ -161,7 +156,7 @@ abstract module VerifiableLucid {
             generatedEvent := None();
         }
 
-        // generate an event to a port right now.
+        // generate an event to a port
         method generate_port(p : nat, e : Event)
             modifies this`emittedEvents
             ensures emittedEvents == old(emittedEvents)[(p, curTime) := e]
@@ -188,12 +183,9 @@ abstract module VerifiableLucid {
         method generate(e : Event) 
             modifies this`generatedEvent
             requires this.generatedEvent == None()
-            // modifies this`recircQueue
             ensures  this.generatedEvent == Some(e)
-            // ensures recircQueue == old(recircQueue) + [(curTime + TRecirc, e)]
             {
                 generatedEvent := Some(e);
-                // recircQueue := recircQueue + [(curTime + TRecirc, e)];
             }
 
         method nextRecirc() returns (e : Event)
@@ -208,7 +200,7 @@ abstract module VerifiableLucid {
                 return recircQueue[0].1;
             }
         }        
-        // do recirculation queue maintenence and then increment the clock.
+        // do recirculation queue maintenence, then increment the clock.
         method clockTick()
             modifies this`curTime, this`handlingRecirc, this`generatedEvent, this`recircQueue
             requires handlingRecirc ==> |recircQueue| > 0
@@ -243,7 +235,7 @@ abstract module VerifiableLucid {
             curTime := curTime + 1;
         }
 
-
+        // Execution trace helpers
         twostate predicate records(e : Event)
             reads this`trace
             reads this`curTime
@@ -257,6 +249,15 @@ abstract module VerifiableLucid {
             trace := trace[curTime := e];
         }
 
+        // event is ready to process
+        // event arrived from anywhere
+        predicate readyToHandle(e : Event) 
+            reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime, this`generatedEvent
+        {
+            generatedEvent == None() &&
+            canUseCurrentClock() &&
+            (handlingRecirc ==> isNextRecircEvent(e))
+        }
 
         predicate canUseCurrentClock()
             reads this`trace, this`curTime
@@ -288,14 +289,6 @@ abstract module VerifiableLucid {
             (|recircQueue| > 0) && (recircQueue[0].1 == e) && (recircQueue[0].0 <= curTime)
         }
 
-        // event arrived from anywhere
-        predicate readyToHandle(e : Event) 
-            reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime, this`generatedEvent
-            {
-                generatedEvent == None() &&
-                canUseCurrentClock() &&
-                (handlingRecirc ==> isNextRecircEvent(e))
-            }
     }
 }
 
