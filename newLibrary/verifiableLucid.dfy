@@ -180,23 +180,8 @@ abstract module VerifiableLucid {
         // recirculation event generation
         twostate predicate generated(e : Event) 
             reads this`generatedEvent
-            // reads this`recircQueue, this`handlingRecirc, this`curTime
         {
             generatedEvent == Some(e)
-            //     |recircQueue| > 0 
-            // &&
-            //     (if (handlingRecirc) then (
-            //          |recircQueue| == |old(recircQueue)|
-            //     ) else (
-            //         |recircQueue| == |old(recircQueue)| + 1
-            //     ))
-            // &&  recircQueue[|recircQueue|-1] == (curTime + TRecirc, e)
-
-
-            // OLD
-            // && 
-            // &&  (handlingRecirc ==> |recircQueue| == |old(recircQueue)|)
-            // &&  (!handlingRecirc ==> |recircQueue| == |old(recircQueue)| + 1)
         }
 
         // generate a recirc event
@@ -211,8 +196,7 @@ abstract module VerifiableLucid {
                 // recircQueue := recircQueue + [(curTime + TRecirc, e)];
             }
 
-        // non-recirculation event generation
-        method getNextRecirc() returns (e : Event)
+        method nextRecirc() returns (e : Event)
             modifies this`handlingRecirc
             requires |recircQueue| > 0
             requires recircQueue[0].0 <= curTime

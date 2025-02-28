@@ -22,7 +22,7 @@ class Program ... {
         ensures  emitted(1, a(x))
         ensures  recorded(a(x))
     {
-        generate(b(x)); // generate a recirculation event.
+        generate(b(x));
         generate_port(1, a(x)); 
         record(a(x));
     }
@@ -35,7 +35,6 @@ class Program ... {
         record(b(y));
     }    
 }
-
 
 // Outside of the program, prove some properties about the trace. 
 // For example, you can't process two events on the same cycle.
@@ -55,24 +54,13 @@ method traceTest()
 
         // // I know there's a recirc event waiting. And its a b. So call it. 
         // p.B(1);
-        var nextEvent := p.getNextRecirc(); // Get an event out of the recirculation queue and process it.
-        assert |p.recircQueue| == 2;
+        var nextEvent := p.nextRecirc();
         match nextEvent {case b(x) => p.B(x);} // the verifier knows that the event is a b!
-        assert |p.recircQueue| == 2;
         assert p.recircQueue[0].1 == b(1);
         p.clockTick();
         assert |p.recircQueue| == 1;
 
-
         assert p.recircQueue[0].1 == b(1);
-        // // This time, I don't know what the next event is. So ask the library.
-        // nextEvent := p.getNextRecirc();
-        // match nextEvent {case b(x) => p.B(x);}
-
-        // // reason about output
-        // assert p.emittedEvents[(1, 0)] == a(1);
-        // assert p.emittedEvents[(1, 0)] == a(1);
-
 
         // // reason about execution trace
         assert p.trace[1] == a(1);
