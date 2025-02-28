@@ -31,9 +31,14 @@ module LucidTypes {
         ensures to_uint24(x) == x % max24
     { x % max24 }
 
-    function to_uint32(x : int) : uint32
+    function to_uint32(x : nat) : uint32
         ensures to_uint32(x) == x % max32
     { x % max32 }
+
+    function zeros(len : uint32) : seq<uint32> {
+        seq(len, (_ => 0))
+    }
+
 }
 
 module Arr {
@@ -119,6 +124,8 @@ module Helpers {
     {
         return s;
     }
+
+
 }
 
 abstract module VerifiableLucid {

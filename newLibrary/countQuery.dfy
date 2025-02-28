@@ -31,7 +31,7 @@ module CountQuery refines VerifiableLucid {
         }
         function memval (oldVal: uint32, unused: uint32) : uint32 { oldVal }
 
-        // Packet handler specification: 
+        // Packet handler specification:
         //                1. pkt emits packets with source 0 to port 0, 
         //                   and all other packets to port 1.
         //                2. pkt increments pktCtr[src % 8] by 1.
