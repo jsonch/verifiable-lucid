@@ -2,9 +2,8 @@
 // methods: 
 // count(key) -- count the key, return updated result
 // events / handlers:
-// query(key) -- query value of key
+// query(sport, key) -- get value of key, send response(key, value) back to sport
 // clear(min, max) -- clear indices from min to max
-
 
 include "verifiableLucid.dfy"
 
