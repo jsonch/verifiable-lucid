@@ -110,6 +110,11 @@ module Arr {
 
 
 abstract module VerifiableLucid {
+    datatype Opt<t> = 
+        | None()
+        | Some(v : t)
+
+
     import opened LucidTypes
     import opened Arr
     type Event(==) 
@@ -123,7 +128,6 @@ abstract module VerifiableLucid {
         return s;
     }
 
-
     class Program {
 
         const TRecirc : nat := 1 // recirc delay
@@ -134,18 +138,27 @@ abstract module VerifiableLucid {
         var handlingRecirc : bool
         var curTime : nat
 
+        var generatedEvent : Opt<Event>
+        // TODO: use generatedEvent, so that the handlers don't have 
+        // to touch the recircQueue.
+        // TODO: remove the dequeue from the ensures.
+        // TODO: make clockTick enqueue of generated event.
+        // TODO: make clockTick dequeue the recirculated event, if it has been processed.
+
         constructor ()
             ensures recircQueue == []
             ensures curTime == 0
             ensures trace == map[]
             ensures handlingRecirc == false
             ensures emittedEvents == map[]
+            ensures generatedEvent == None()
         {
             recircQueue := [];
             trace := map[];
             curTime := 0;
             handlingRecirc := false;
             emittedEvents := map[];
+            generatedEvent := None();
         }
 
         // generate an event to a port right now.
@@ -166,28 +179,36 @@ abstract module VerifiableLucid {
 
         // recirculation event generation
         twostate predicate generated(e : Event) 
-            reads this`recircQueue, this`handlingRecirc, this`curTime
+            reads this`generatedEvent
+            // reads this`recircQueue, this`handlingRecirc, this`curTime
         {
-                |recircQueue| > 0 
-            &&
-                (if (handlingRecirc) then (
-                     |recircQueue| == |old(recircQueue)|
-                ) else (
-                    |recircQueue| == |old(recircQueue)| + 1
-                ))
-            // && 
+            generatedEvent == Some(e)
+            //     |recircQueue| > 0 
+            // &&
+            //     (if (handlingRecirc) then (
+            //          |recircQueue| == |old(recircQueue)|
+            //     ) else (
+            //         |recircQueue| == |old(recircQueue)| + 1
+            //     ))
+            // &&  recircQueue[|recircQueue|-1] == (curTime + TRecirc, e)
 
+
+            // OLD
+            // && 
             // &&  (handlingRecirc ==> |recircQueue| == |old(recircQueue)|)
             // &&  (!handlingRecirc ==> |recircQueue| == |old(recircQueue)| + 1)
-            &&  recircQueue[|recircQueue|-1] == (curTime + TRecirc, e)
         }
 
         // generate a recirc event
         method generate(e : Event) 
-            modifies this`recircQueue
-            ensures recircQueue == old(recircQueue) + [(curTime + TRecirc, e)]
+            modifies this`generatedEvent
+            requires this.generatedEvent == None()
+            // modifies this`recircQueue
+            ensures  this.generatedEvent == Some(e)
+            // ensures recircQueue == old(recircQueue) + [(curTime + TRecirc, e)]
             {
-                recircQueue := recircQueue + [(curTime + TRecirc, e)];
+                generatedEvent := Some(e);
+                // recircQueue := recircQueue + [(curTime + TRecirc, e)];
             }
 
         // non-recirculation event generation
@@ -203,67 +224,55 @@ abstract module VerifiableLucid {
                 return recircQueue[0].1;
             }
         }        
-        // increment the system clock
+        // do recirculation queue maintenence and then increment the clock.
         method clockTick()
-            modifies this`curTime, this`handlingRecirc
+            modifies this`curTime, this`handlingRecirc, this`generatedEvent, this`recircQueue
+            requires handlingRecirc ==> |recircQueue| > 0
             ensures curTime == old(curTime) + 1
             ensures handlingRecirc == false
+            ensures generatedEvent == None()
+            ensures 
+                match (old(handlingRecirc), old(generatedEvent)) {
+                    // if we are not handling a recirc, append the generated event (if there is one)
+                    case (false, Some(e)) => recircQueue == (old(recircQueue) + [(old(curTime) + TRecirc, e)])
+                    case (false, None) => recircQueue == old(recircQueue)
+                    // if we _are_ handling a recirc, we also pop that recirc off of the front.
+                    case (true, Some(e)) => recircQueue == (old(recircQueue)[1..] + [(old(curTime) + TRecirc, e)])
+                    case (true, None) => recircQueue == old(recircQueue)[1..]
+                }
         {
-            curTime := curTime + 1;
+            // update recirc queue and state, then tick clock.
+            match (handlingRecirc, generatedEvent) {
+                case (false, Some(e)) => {
+                    recircQueue := recircQueue + [(curTime + TRecirc, e)];
+                }
+                case (false, None()) => {}
+                case (true, Some(e)) => {
+                    recircQueue := recircQueue[1..] + [(curTime + TRecirc, e)];
+                }
+                case (true, None) => {
+                    recircQueue := recircQueue[1..];                    
+                }
+            }
+            generatedEvent := None();
             handlingRecirc := false;
+            curTime := curTime + 1;
         }
 
-        // finish processing an event.
-        method finish(e : Event) 
-            modifies this`recircQueue, this`trace
-            requires handlingRecirc ==> |recircQueue| > 0
-            ensures (
-                if handlingRecirc 
-                then (
-                    (recircQueue == old(recircQueue)[1..])
-                ) else (
-                    recircQueue == old(recircQueue)
-                )
-            )
-            // ensures  handlingRecirc ==> (recircQueue == old(recircQueue)[1..])
-            // ensures  (!handlingRecirc) ==> recircQueue == old(recircQueue)
-            ensures trace == old(trace)[curTime := e]
-            {
-                if (handlingRecirc) {
-                    recircQueue := recircQueue[1..];
-                }
-                trace := trace[curTime := e];
-            }
 
-        // conditions that must be true about the recirculation queue
-        // when finished processing an event
-        twostate predicate finished(e : Event)
-            reads this`handlingRecirc
-            reads this`recircQueue
+        twostate predicate recorded(e : Event)
             reads this`trace
             reads this`curTime
         {
-            (handlingRecirc ==> |old(recircQueue)| > 0)
-            &&
-            // recircQueue preserves prefix on handling recirc, except first event
-            (handlingRecirc ==> 
-                |recircQueue| >= |old(recircQueue)| - 1
-                &&
-                recircQueue[0..(|old(recircQueue)|-1)] == old(recircQueue)[1..]        
-            )        
-            &&
-            // recircQueue preserves everything on handling non recirc
-            ((!handlingRecirc) ==> 
-
-                |recircQueue| >= |old(recircQueue)|
-                &&
-                recircQueue[0..(|old(recircQueue)|)] == old(recircQueue)      
-            )
-            &&
-            trace == old(trace)[curTime := e]
-            && 
-            handlingRecirc == old(handlingRecirc)
+            trace == old(trace)[curTime := e]            
         }
+        method record(e : Event) 
+            modifies this`trace
+            ensures recorded(e)
+        {
+            trace := trace[curTime := e];
+        }
+
 
         predicate canUseCurrentClock()
             reads this`trace, this`curTime
@@ -273,8 +282,9 @@ abstract module VerifiableLucid {
 
         // event arrived from recirc
         predicate recircArrival(e : Event) 
-            reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime
+            reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime, this`generatedEvent
             {
+                generatedEvent == None() &&
                 canUseCurrentClock() &&
                 handlingRecirc
                 && (
@@ -292,8 +302,9 @@ abstract module VerifiableLucid {
 
         // event arrived from anywhere
         predicate arrived(e : Event) 
-            reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime
+            reads this`recircQueue, this`handlingRecirc, this`trace, this`curTime, this`generatedEvent
             {
+                generatedEvent == None() &&
                 canUseCurrentClock() &&
                 if (handlingRecirc) then (
                     (|recircQueue| > 0) && (recircQueue[0].1 == e) && (recircQueue[0].0 <= curTime)

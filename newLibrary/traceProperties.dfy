@@ -14,56 +14,72 @@ datatype Event =
 class Program ... {
 
     method A(x : uint32) 
-        modifies this`recircQueue, this`trace, this`emittedEvents
+        modifies this`generatedEvent
+        modifies this`emittedEvents
+        modifies this`trace
         requires arrived(a(x))
-        ensures  finished(a(x))       
         ensures  generated(b(x))      
         ensures  emitted(1, a(x))
+        ensures  recorded(a(x))
     {
-        generate(b(x));
-        generate_port(1, a(x));
-        finish(a(x));
+        generate(b(x)); // generate a recirculation event.
+        generate_port(1, a(x)); 
+        record(a(x));
     }
 
     method B(y : uint32)
-        modifies this`recircQueue, this`trace
+        modifies this`trace
         requires arrived(b(y))
-        ensures  finished(b(y))
+        ensures  recorded(b(y))
     {
-        finish(b(y));        
+        record(b(y));
     }    
 }
 
+
 // Outside of the program, prove some properties about the trace. 
 // For example, you can't process two events on the same cycle.
-method traceTest() 
+method traceTest()
     {
-        var nextEvent;
         var p := new Program();
-        p.A(1); // A is the handler method, calling it directly models the event arriving and being handled immediately.
-        p.clockTick(); // manually tick the clock -- give user absolute control over inter-arrival properties
+        p.clockTick();      // increment system time by 1.
+        assert |p.recircQueue| == 0;
+        p.A(1);             // Calling a handler represents an event arriving from the network.
+        p.clockTick();
+        assert |p.recircQueue| == 1;
         p.clockTick();
         p.A(1);
-        assert |p.recircQueue| == 2; // Each A generates a recirculated event, so the queue has 2 events in it
         p.clockTick();
+        assert |p.recircQueue| == 2;
+        // assert p.recircQueue[1].1 == b(1);
 
-        nextEvent := p.getNextRecirc(); // Get an event out of the recirculation queue and process it.
+        // // I know there's a recirc event waiting. And its a b. So call it. 
+        // p.B(1);
+        var nextEvent := p.getNextRecirc(); // Get an event out of the recirculation queue and process it.
+        assert |p.recircQueue| == 2;
         match nextEvent {case b(x) => p.B(x);} // the verifier knows that the event is a b!
+        assert |p.recircQueue| == 2;
+        assert p.recircQueue[0].1 == b(1);
         p.clockTick();
-        nextEvent := p.getNextRecirc();
-        match nextEvent {case b(x) => p.B(x);}
-
-        // reason about output
-        assert p.emittedEvents[(1, 0)] == a(1);
-        assert p.emittedEvents[(1, 0)] == a(1);
+        assert |p.recircQueue| == 1;
 
 
-        // reason about execution trace
-        assert p.trace[0] == a(1);
-        assert 1 !in p.trace;
-        assert p.trace[2] == a(1);
-        assert p.trace[3] == b(1);
+        assert p.recircQueue[0].1 == b(1);
+        // // This time, I don't know what the next event is. So ask the library.
+        // nextEvent := p.getNextRecirc();
+        // match nextEvent {case b(x) => p.B(x);}
+
+        // // reason about output
+        // assert p.emittedEvents[(1, 0)] == a(1);
+        // assert p.emittedEvents[(1, 0)] == a(1);
+
+
+        // // reason about execution trace
+        assert p.trace[1] == a(1);
+        assert 0 !in p.trace;
+        assert p.trace[3] == a(1);
         assert p.trace[4] == b(1);
+        // assert p.trace[4] == b(1);
     }
 
 }
