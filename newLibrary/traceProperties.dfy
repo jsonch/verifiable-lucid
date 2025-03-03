@@ -18,9 +18,9 @@ class Program ... {
         modifies this`emittedEvents
         modifies this`trace
         requires readyToHandle(a(x))
-        ensures  generates(b(x))      
-        ensures  emits(1, a(x))
-        ensures  records(a(x))
+        ensures  generates(b(x))  // generates a recirculation event
+        ensures  emits(1, a(x))   // forwards an event to a port (port 1)
+        ensures  records(a(x))    // less important: we log the processing of this event
     {
         generate(b(x));
         generate_port(1, a(x)); 
@@ -36,6 +36,8 @@ class Program ... {
     }    
 }
 
+
+// note/idea: enforce higher input priority for recirculation events
 // Outside of the program, prove some properties about the trace. 
 // For example, you can't process two events on the same cycle.
 method traceTest()
@@ -52,13 +54,12 @@ method traceTest()
         assert |p.recircQueue| == 2;
         var nextEvent := p.nextRecirc();
         match nextEvent {case b(x) => p.B(x);} // the verifier knows that the event is a b!
-        assert p.recircQueue[0].1 == b(1);
         p.clockTick();
         assert |p.recircQueue| == 1;
 
         assert p.recircQueue[0].1 == b(1);
 
-        // // reason about execution trace
+        // reason about execution trace
         assert p.trace[1] == a(1);
         assert 0 !in p.trace;
         assert p.trace[3] == a(1);

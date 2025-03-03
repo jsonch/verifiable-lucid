@@ -1,9 +1,10 @@
 include "verifiableLucid.dfy"
 
-/*  A simple example that uses verifiable lucid to 
-    implement a simple program with a counting packet forwarder 
-    and a control-plane query event that returns the count of packets.
-    This program uses single handler verification. */
+/*  A simple program with a counting packet forwarder 
+    and a query event that causes a report event to be generated.
+    This program only verifies properties about individual handlers, 
+    using pre and post conditions. So there are no "event sequence"
+    methods, and the "readyToHandle(event)" predicate is not used. */
 
 module CountQuery refines VerifiableLucid {
 
@@ -13,7 +14,7 @@ module CountQuery refines VerifiableLucid {
         | getCount(i : uint32)
         | countReport(i : uint32, count : uint32)
 
-    class Program ... {
+    class VerifiableLucidProgram ... {
         // Array and initialization
         var pktCtr : LArray<uint32>
 
@@ -35,12 +36,12 @@ module CountQuery refines VerifiableLucid {
         //                1. pkt emits packets with source 0 to port 0, 
         //                   and all other packets to port 1.
         //                2. pkt increments pktCtr[src % 8] by 1.
-        method Pkt(src : uint32, dst : uint32) 
+        method Pkt(src : uint32, dst : uint32)
             modifies    this`emittedEvents, this.pktCtr`cells    
-            requires |pktCtr.cells| == 8 
+            requires |pktCtr.cells| == 8 // size of pktCtr array -- 8 cells
+            ensures  LArray.updated_cell(pktCtr, src % 8, (old(pktCtr.cells)[src % 8] + 1) % max32)
             ensures         ((src == 0) ==> emits(0, pkt(src, dst)))
                         &&  ((src != 0) ==> emits(1, pkt(src, dst)))
-            ensures  LArray.updated_cell(pktCtr, src % 8, (old(pktCtr.cells)[src % 8] + 1) % max32)
         {
             if (src == 0) {
                 generate_port(0, pkt(src, dst));
@@ -52,9 +53,9 @@ module CountQuery refines VerifiableLucid {
 
         // count query specification
         // getCount emits a countReport event with the count of packets in pktCtr[i % 8].
-        method getCount(i : uint32)
+        method GetCount(i : uint32)
             modifies this`emittedEvents
-            requires |pktCtr.cells| == 8 
+            requires |pktCtr.cells| == 8
             ensures emits(0, countReport(i, old(pktCtr.cells)[i % 8]))
         {
             var count := LArray<uint32>.Get(pktCtr, i % 8, memval, 0);
