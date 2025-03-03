@@ -14,7 +14,7 @@ module CountQuery refines VerifiableLucid {
         | getCount(i : uint32)
         | countReport(i : uint32, count : uint32)
 
-    class VerifiableLucidProgram ... {
+    class Program ... {
         // Array and initialization
         var pktCtr : LArray<uint32>
 

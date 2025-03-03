@@ -8,7 +8,7 @@ abstract module VerifiableLucid {
     type time = nat
     type port = nat
 
-    class VerifiableLucidProgram {
+    class Program {
 
         const TRecirc : nat := 1 // How long it takes for a packet / event to recirculate.
 

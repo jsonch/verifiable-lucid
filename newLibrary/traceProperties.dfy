@@ -45,7 +45,7 @@ method traceTest()
         var p := new Program();
         p.clockTick();      // increment system time by 1.
         assert |p.recircQueue| == 0;
-        p.A(1);             // Calling a handler represents an event arriving from the network.
+        p.A(1); // Calling a handler represents an event arriving from the network.
         p.clockTick();
         assert |p.recircQueue| == 1;
         p.clockTick();
