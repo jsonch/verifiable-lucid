@@ -1,33 +1,58 @@
-// random nat between s and e, but really just s.
-method rand(s : nat, e : nat) returns (rv : nat)
-    requires s < e
-    ensures s <= rv < e
-{
-    return s;
-}
+/*
+This implements a set data structure with a timeout. 
+It is meant to model a sliding window bloom filter. 
+There are multiple sets, called "panes",
+and each pane is active for a certain time interval.
+When a pane is active, new elements are inserted into it. 
+When the time interval is up, the panes rotate: 
+    the active pane becomes a "maintaining" pane. 
+    the oldest "maintaining" pane becomes a "clearing" pane.
+    and the "clearing" pane becomes the new active pane.
+Maintaining panes are read-only, used for querying.
+Clearing panes are in the process of being deleted. 
+This is the same temporal logic as a sliding window bloom filter, 
+just using sets as panes instead of bloom filters.
+
+The SlidingWindowSet class implements the data structure. 
+It has two methods that each represent a handler or method: 
+    Insert(key) -- inserts the key into the set
+    Query(key) -- returns whether the key has been added to the set
+- Both methods also rotate the panes and clear the oldest pane as needed.
+
+The most important property of the SlidingWindowSet that has a rotation 
+interval of I time units is that if you insert an item into the set at time t,
+you will be able to retrieve it until at least time t' < t + I,
+regardless of what other operations you perform on the SlidingWindowSet in the meantime.
+
+We prove this property in the "temporalCorrectness" method at the end of the file.
+The same approach should also work for a bloom filter implementation.
+*/
 
 
 module SlidingSetTest {
-    type key = x : nat | 0 <= x < 256
+    const T : nat := 1024   // total time units -- should be a multiple of K * I
+    const K : nat := 4      // number of panes -- this should be fixed at 4
+    const I : nat := 8      // number of time units per pane (time between pane rotation)
+                            //  -- should be a power of 2 and a factor of T
+                            //  -- For the bloom filter implementation, it 
+                            //     must also be large enough to allow 
+                            //     for a full "clear" operation to take place, 
+                            //     which depends on the number of slots in the bloom filter 
+                            //     and the minimum assumed rate of incoming events.
+
+    // types for keys, timestamps, and panes, for readability.
+    type key = x : nat | 0 <= x < 256 // keys stored in sets.
     type ts = x : nat | 0 <= x < T
-    type pane = x : nat | 0 <= x < 4
-    const T : nat := 32 // total time units
-    // const I : nat := 64 // time between packets
-    const K : ts := 4 // number of panes
-        // so with K == 4 and T == 32, we have 8 time units per pane
-    // const I : nat := T / K // max time between packets
-    const I : nat := 4 // time between pane rotation
-    // T should be a multiple of K * I
+    type pane = x : nat | 0 <= x < K
 
     class SlidingWindowSet {
         var ts : ts
-        var lastTs : ts
         var pane : pane
 
         ghost var trueTs : nat
         ghost var trueLastTs : nat
 
-        // the panes.
+        // The "panes" are sets whose roles rotate each interval
         var p0 : set<key>
         var p1 : set<key>
         var p2 : set<key>
@@ -35,66 +60,35 @@ module SlidingSetTest {
 
         constructor ()
             ensures ts == 0
-            ensures lastTs == 0
             ensures trueTs == 0
             ensures trueLastTs == 0
             ensures pane == 0
-            ensures p0 == {}
-            ensures p1 == {}
-            ensures p2 == {}
-            ensures p3 == {}
+            ensures p0 == {} && p1 == {} && p2 == {} && p3 == {}
         {
-            lastTs := 0;
             ts := 0;
             pane := 0;
             trueTs := 0;
             trueLastTs := 0;
-            p0 := {};
-            p1 := {};
-            p2 := {};
-            p3 := {};
+            p0, p1, p2, p3 := {}, {}, {}, {};
         }
         function calcPane(ts : ts) : pane 
         {
-            (ts / I ) % K
+            ( ts / I ) % K
         }
-
-        function calcTruePane(realTs : nat) : nat 
-        {
-            ((realTs % T) / I )% K
-        }
-
-        lemma paneEqTruePane(ts : ts, time : nat)
-            requires ts == time % T
-            ensures calcPane(ts) == calcTruePane(time)
-        { }
 
         ghost predicate timeInvariant ()
-            reads this`lastTs, this`trueLastTs, this`ts, this`trueTs
+            reads this`trueLastTs, this`ts, this`trueTs
         {
                 trueTs % T == ts
-            &&  trueLastTs % T == lastTs
-            // &&  ts - lastTs <= I // must get at least 1 packet per interval, to do the rotate
+            &&  trueTs - trueLastTs <= I 
+            // must get at least 1 packet per interval, to do the rotate
+            // In the Bloom filter implementation, this would be the minimum rate of incoming events
+            // to complete a full "clear" operation.
         }
 
-        // rotate is basically a noop -- nothing changes, just the pane.        
-        method rotate()
-            modifies this`lastTs, this`trueLastTs, this`ts, this`trueTs, this`pane
-            requires timeInvariant()
-            requires calcPane(lastTs) == calcTruePane(trueLastTs)
-            ensures  timeInvariant()
-            ensures  calcPane(ts) == calcTruePane(trueTs)
-            ensures  trueLastTs == trueTs
-            ensures  pane == calcPane(ts)
-            ensures  unchanged(this`ts)
-            ensures  unchanged(this`trueTs)
-        {
-            pane := calcPane(ts);
-            lastTs := ts;
-            trueLastTs := trueTs;
-        }
 
-        twostate predicate clearUpdate ()
+        // describes the effect that a "clear" event / operation has on the state.
+        twostate predicate clearEffect ()
         reads this`pane
         reads this`p0, this`p1, this`p2, this`p3
         {
@@ -104,24 +98,22 @@ module SlidingSetTest {
                 case 2 => p0 == old(p0) && p1 == old(p1) && p2 == old(p2) && p3 == {}
                 case 3 => p0 == {} && p1 == old(p1) && p2 == old(p2) && p3 == old(p3)
             }
-        }        
+        }
 
-        // only do the clear part
+        // A "clear" event wipes the current "clearing" pane
         method clear()
-            modifies this`lastTs, this`trueLastTs, this`ts, this`trueTs, this`pane
+            modifies this`trueLastTs, this`ts, this`trueTs, this`pane
             modifies this`p0, this`p1, this`p2, this`p3
             requires timeInvariant()
-            requires calcPane(lastTs) == calcTruePane(trueLastTs)
             ensures  timeInvariant()
-            ensures  calcPane(ts) == calcTruePane(trueTs)
+            // ensures  calcPane(ts) == calcTruePane(trueTs)
             ensures  trueLastTs == trueTs
             ensures  pane == calcPane(ts)
-            ensures clearUpdate()
+            ensures  clearEffect ()
             ensures     unchanged(this`ts)
             ensures     unchanged(this`trueTs)
         {
             pane := calcPane(ts);
-            lastTs := ts;
             trueLastTs := trueTs;
             match pane {
                 case 0 => {p1 := {};}
@@ -130,8 +122,9 @@ module SlidingSetTest {
                 case 3 => {p0 := {};}
             }
         }        
-
-        twostate predicate insertUpdate (k : key)
+        // An insert adds a key to the "inserting" pane 
+        // and also wipes the current "clearing" pane
+        twostate predicate insertEffect (k : key)
         reads this`pane
         reads this`p0, this`p1, this`p2, this`p3
         {
@@ -144,21 +137,18 @@ module SlidingSetTest {
         }
 
         method insert(k : key)
-            modifies this`lastTs, this`trueLastTs, this`ts, this`trueTs, this`pane
+            modifies this`trueLastTs, this`ts, this`trueTs, this`pane
             modifies this`p0, this`p1, this`p2, this`p3
             requires timeInvariant()
-            requires calcPane(lastTs) == calcTruePane(trueLastTs)
             ensures  timeInvariant()
-            ensures  calcPane(ts) == calcTruePane(trueTs)
             ensures  trueLastTs == trueTs
             ensures  pane == calcPane(ts)
-            ensures insertUpdate(k)
+            ensures insertEffect(k)
             ensures  unchanged(this`ts)
             ensures unchanged(this`trueTs)
         {
             // first just calculate pane and update timestamp.
             pane := calcPane(ts);
-            lastTs := ts;
             trueLastTs := trueTs;
             // next, insert into the appropriate pane.
             match pane {
@@ -175,10 +165,9 @@ module SlidingSetTest {
                 case 2 => {p3 := {};}
                 case 3 => {p0 := {};}
             }
-            assert (insertUpdate(k) && pane == 0) ==> k in p0;
         }
 
-        twostate predicate queryUpdate (k : key)
+        twostate predicate queryEffect (k : key)
         reads this`pane
         reads this`p0, this`p1, this`p2, this`p3
         {
@@ -192,7 +181,8 @@ module SlidingSetTest {
             }
         }
 
-        predicate queryResult (k : key)
+        // The result of a query event
+        ghost predicate queryResult (k : key)
         reads this`pane
         reads this`p0, this`p1, this`p2, this`p3
         {
@@ -206,22 +196,20 @@ module SlidingSetTest {
         }
 
         method query(k : key) returns (rv : bool)
-            modifies this`lastTs, this`trueLastTs, this`ts, this`trueTs, this`pane
+            // modifies this`lastTs, 
+            modifies this`trueLastTs, this`ts, this`trueTs, this`pane
             modifies this`p0, this`p1, this`p2, this`p3
             requires timeInvariant()
-            requires calcPane(lastTs) == calcTruePane(trueLastTs)
             ensures  timeInvariant()
-            ensures  calcPane(ts) == calcTruePane(trueTs)
             ensures  trueLastTs == trueTs
             ensures  pane == calcPane(ts)
-            ensures  queryUpdate(k)
+            ensures  queryEffect(k)
             ensures  rv == queryResult(k)
             ensures  unchanged(this`ts)
             ensures  unchanged(this`trueTs)
         {
-            // first just calculate pane and update timestamp.
+            // first calculate pane and update ghost last time.
             pane := calcPane(ts);
-            lastTs := ts;
             trueLastTs := trueTs;
             // next, query the pane and the previous pane for the key.
             match pane {
@@ -239,8 +227,8 @@ module SlidingSetTest {
             }            
         }
 
-        // Update the clock
-        method clock(delay : nat)
+        // Advance clock simply moves the time forward.
+        method advanceClock(delay : nat)
             modifies this`ts, this`trueTs
             requires ts == trueTs % T
             ensures ts == trueTs % T
@@ -252,82 +240,7 @@ module SlidingSetTest {
         }
 
     }
-
-    // method test()
-    // {
-    //     var rv : bool;
-    //     var slidingSet := new SlidingWindowSet();
-    //     assert slidingSet.timeInvariant();
-    //     assert slidingSet.pane == 0;
-    //     assert slidingSet.ts == 0;
-    //     assert slidingSet.p0 == {};
-    //     assert slidingSet.p1 == {};
-    //     slidingSet.insert(1);
-    //     assert 1 in slidingSet.p0;
-    //     rv := slidingSet.query(1);
-    //     assert rv;
-    //     slidingSet.clock(1);
-    //     rv := slidingSet.query(1);
-    //     assert rv;
-    // }
-
-    twostate predicate preserved(oldp : set<key>, p : set<key>)
-    {
-        forall k :: k in oldp ==> k in p
-    }
-
-    
-    // method clearTest_almost(slidingSet : SlidingWindowSet, testKey : key, t' : nat)
-    //     modifies slidingSet
-    //     requires slidingSet.timeInvariant()
-    //     requires t' < I // Not quite what we want. 
-    // {
-    //     // Insert the test key into the timer.
-    //     slidingSet.insert(testKey);
-    //     label L: // remember the state at this point.
-    //     var i := 0;
-    //     while (i < t')
-    //         invariant i <= (I - 1)
-    //         invariant slidingSet.timeInvariant()
-    //         invariant slidingSet.trueTs == old@L(slidingSet.trueTs) + i
-    //         invariant slidingSet.ts == (old@L(slidingSet.ts) + i) % T
-    //         // the pane may only advance by 1 in this time period.
-    //         invariant (
-    //             match (old@L(slidingSet.pane)) {
-    //                 case 0 => slidingSet.pane == 0 || slidingSet.pane == 1
-    //                 case 1 => slidingSet.pane == 1 || slidingSet.pane == 2
-    //                 case 2 => slidingSet.pane == 2 || slidingSet.pane == 3
-    //                 case 3 => slidingSet.pane == 3 || slidingSet.pane == 0
-    //             }
-    //         )
-    //         // throughout the loop, the pane that was current at the
-    //         // beginning is always preserved (i.e., not wiped)
-    //         invariant
-    //             match old@L(slidingSet.pane) {
-    //                 case 0 => 
-    //                     preserved(old@L(slidingSet.p0), slidingSet.p0)
-    //                     && preserved(old@L(slidingSet.p3), slidingSet.p3)
-    //                 case 1 =>
-    //                     preserved(old@L(slidingSet.p1), slidingSet.p1)
-    //                     && preserved(old@L(slidingSet.p0), slidingSet.p0)
-    //                 case 2 =>
-    //                     preserved(old@L(slidingSet.p2), slidingSet.p2)
-    //                     && preserved(old@L(slidingSet.p1), slidingSet.p1)
-    //                 case 3 =>
-    //                     preserved(old@L(slidingSet.p3), slidingSet.p3)
-    //                     && preserved(old@L(slidingSet.p2), slidingSet.p2)
-    //             }
-    //     {
-    //         slidingSet.clock(1);
-    //         slidingSet.clear();
-    //         i := i + 1;
-    //     }
-    //     var rv : bool;
-    //     rv := slidingSet.query(testKey);
-    //     assert rv;
-
-    // }
-
+    /* Property proof and helpers */
 
     twostate predicate paneAdvanceLimit(slidingSet : SlidingWindowSet)
         reads slidingSet`pane
@@ -338,6 +251,11 @@ module SlidingSetTest {
             case 2 => slidingSet.pane == 2 || slidingSet.pane == 3
             case 3 => slidingSet.pane == 3 || slidingSet.pane == 0
         }
+    }
+
+    twostate predicate preserved(oldp : set<key>, p : set<key>)
+    {
+        forall k :: k in oldp ==> k in p
     }
     twostate predicate panePreservation(slidingSet : SlidingWindowSet)
         reads slidingSet`pane, slidingSet`p0, slidingSet`p1, slidingSet`p2, slidingSet`p3
@@ -362,36 +280,6 @@ module SlidingSetTest {
         then performing 1 clear operation per time-unit until t', 
         and finally querying the set for k at time t' such that t' < t + I, 
         will return the key. */
-    // method clearTest(slidingSet : SlidingWindowSet, k : key, t : nat, t' : nat)
-    //     modifies slidingSet
-    //     requires slidingSet.timeInvariant()
-    //     requires slidingSet.trueTs == t
-    //     requires t <= t' < t + I
-    // {
-    //     // Insert the test key into the sliding set.
-    //     slidingSet.insert(k);
-    //     label L: // remember the state at this point.
-    //     var i := t; // set up the timing loop.
-    //     while (i < t')
-    //         invariant i < t + I
-    //         invariant slidingSet.timeInvariant()
-    //         invariant slidingSet.trueTs == i
-    //         invariant slidingSet.trueTs == old@L(slidingSet.trueTs) - t + i
-    //         // the pane may only advance by 1 in this time period.
-    //         invariant paneAdvanceLimit@L(slidingSet)
-    //         // throughout the loop, the pane that was current at the
-    //         // beginning is always preserved (i.e., not wiped)
-    //         invariant panePreservation@L(slidingSet)
-    //     {
-    //         slidingSet.clock(1);
-    //         slidingSet.clear();
-    //         i := i + 1;
-    //     }
-    //     var rv : bool;
-    //     rv := slidingSet.query(k);
-    //     assert rv;
-    // }
-
     method rand(s : nat, e : nat) returns (rv : nat)
         requires s <= e
         ensures s <= rv <= e
@@ -399,42 +287,16 @@ module SlidingSetTest {
         return s;
     }
 
-    // Now, vary the interarrival time of operations, within bounds.
-    // method clearTestTime(slidingSet : SlidingWindowSet, k : key, t : nat, t' : nat)
-    //     modifies slidingSet
-    //     requires slidingSet.timeInvariant()
-    //     requires slidingSet.trueTs == t
-    //     requires t < t' < t + I
-    // {
-    //     // Insert the test key into the sliding set.
-    //     slidingSet.insert(k);
-    //     label L: // remember the state at this point.
-    //     var i := t; // the loop starts at time t.
-    //     while (i < t') // and continues until t'
-    //         invariant i <= t'
-    //         invariant slidingSet.timeInvariant()
-    //         invariant slidingSet.trueTs == i // the time is always set to i
-    //         invariant slidingSet.trueTs - old@L(slidingSet.trueTs) < I // the time is always within I of start.
-    //         // the pane may only advance by 1 in this time period.
-    //         invariant paneAdvanceLimit@L(slidingSet)
-    //         // throughout the loop, the pane that was current at the
-    //         // beginning is always preserved (i.e., not wiped)
-    //         invariant panePreservation@L(slidingSet)
-    //     {
-    //         var d := rand(1, (t' - i)); // choose the delay until the next operation.
-    //         slidingSet.clock(d);
-    //         slidingSet.clear();
-    //         i := i + d;
-    //     }
-    //     // increment to t' + 1 (which can be up to I) and retrieve the key.
-    //     slidingSet.clock(1);
-    //     var rv : bool;
-    //     rv := slidingSet.query(k);
-    //     assert rv;
-    // }
+    /* 
+        The property we want to prove is: 
+            if you insert k into a sliding set at time t,             
+            then wait until t' such that t' < t + I,
+            performing any sequence of query and set operations in the mean time, 
+            a query for k at t' will return true.
 
-    // Finally, vary the operation type.
-    method fullProperty(slidingSet : SlidingWindowSet, k : key, t : nat, t' : nat) returns (found : bool)
+        We prove this with a method that verifies the property for any possible execution.
+    */
+    method temporalCorrectness(slidingSet : SlidingWindowSet, k : key, t : nat, t' : nat) returns (found : bool)
         modifies slidingSet
         requires slidingSet.timeInvariant()
         requires slidingSet.trueTs == t
@@ -448,20 +310,25 @@ module SlidingSetTest {
         while (i < t') // and continues until t'
             invariant i <= t'
             invariant slidingSet.timeInvariant()
-            invariant slidingSet.trueTs == i // the time is always set to i
-            invariant slidingSet.trueTs - old@L(slidingSet.trueTs) < I // the time is always within I of start.
-            // the pane may only advance by 1 in this time period.
-            invariant paneAdvanceLimit@L(slidingSet)
-            // throughout the loop, the pane that was current at the
-            // beginning is always preserved (i.e., not wiped)
-            invariant panePreservation@L(slidingSet)
+            invariant slidingSet.trueTs == slidingSet.trueLastTs
+            invariant slidingSet.trueTs == i                            // the time is always set to i
+            invariant slidingSet.trueTs - old@L(slidingSet.trueTs) < I  // the time is always within I of start
+            
+            invariant paneAdvanceLimit@L(slidingSet)    // the pane may only advance by 1 in this time period
+                                                        // throughout the loop, the pane that was current at the
+                                                        // beginning is always preserved (i.e., not wiped)
+            invariant panePreservation@L(slidingSet)    // All elements in the "inserting" pane at label "L"
+                                                        // are still in that pane
         {
-            var d := rand(1, (t' - i));         // choose the delay until the next operation.
-            slidingSet.clock(d);                // update the clock
+            var d := rand(1, (t' - i));         // choose a random delay until the next operation
             var rand_key : key := rand(0, 255); // choose a random key
             var rand_op  : nat := rand(0, 1);   // choose randomly between insert and query
-            // do the chosen operation.
-            if (rand_op == 0) {
+            assert slidingSet.timeInvariant();
+            assert d < I;
+            slidingSet.advanceClock(d);                // update the clock
+
+            assert slidingSet.timeInvariant();
+            if (rand_op == 0) {                 // do the chosen operation on the chosen key.
                 slidingSet.insert(rand_key);
             } else {
                 var _ := slidingSet.query(rand_key);
@@ -470,7 +337,7 @@ module SlidingSetTest {
             i := i + d;
         }
         // increment clock once more -- this makes it at most I -- and then query the key.
-        slidingSet.clock(1);
+        slidingSet.advanceClock(1);
         found := slidingSet.query(k);
     }
 
