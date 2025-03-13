@@ -340,5 +340,4 @@ module SlidingSetTest {
         slidingSet.advanceClock(1);
         found := slidingSet.query(k);
     }
-
 }
