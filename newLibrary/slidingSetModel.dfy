@@ -30,7 +30,7 @@ The same approach should also work for a bloom filter implementation.
 
 
 module SlidingSetTest {
-    const T : nat := 1024   // total time units -- should be a multiple of K * I
+    const T : nat := 64     // total time units -- should be a multiple of K * I
     const K : nat := 4      // number of panes -- this should be fixed at 4
     const I : nat := 8      // number of time units per pane (time between pane rotation)
                             //  -- should be a power of 2 and a factor of T
@@ -80,10 +80,14 @@ module SlidingSetTest {
             reads this`trueLastTs, this`ts, this`trueTs
         {
                 trueTs % T == ts
-            &&  trueTs - trueLastTs <= I 
-            // must get at least 1 packet per interval, to do the rotate
-            // In the Bloom filter implementation, this would be the minimum rate of incoming events
-            // to complete a full "clear" operation.
+            &&  trueTs - trueLastTs <= I // Operating assumption -- 
+                                         // we get at least 1 packet per rotation interval.
+
+                                         // In the full bloom filter implementation, this would 
+                                         // be a smaller interval to make sure that 
+                                         // each cell of the bloom filter can be cleared 
+                                         // before the rotation.
+            
         }
 
 
@@ -106,7 +110,6 @@ module SlidingSetTest {
             modifies this`p0, this`p1, this`p2, this`p3
             requires timeInvariant()
             ensures  timeInvariant()
-            // ensures  calcPane(ts) == calcTruePane(trueTs)
             ensures  trueLastTs == trueTs
             ensures  pane == calcPane(ts)
             ensures  clearEffect ()
@@ -121,20 +124,8 @@ module SlidingSetTest {
                 case 2 => {p3 := {};}
                 case 3 => {p0 := {};}
             }
-        }        
-        // An insert adds a key to the "inserting" pane 
-        // and also wipes the current "clearing" pane
-        twostate predicate insertEffect (k : key)
-        reads this`pane
-        reads this`p0, this`p1, this`p2, this`p3
-        {
-            match pane {
-                case 0 => p0 == old(p0) + {k} && p1 == {} && p2 == old(p2) && p3 == old(p3)
-                case 1 => p0 == old(p0) && p1 == old(p1) + {k} && p2 == {} && p3 == old(p3)
-                case 2 => p0 == old(p0) && p1 == old(p1) && p2 == old(p2) + {k} && p3 == {}
-                case 3 => p0 == {} && p1 == old(p1) && p2 == old(p2) && p3 == old(p3) + {k}
-            }
         }
+
 
         method insert(k : key)
             modifies this`trueLastTs, this`ts, this`trueTs, this`pane
@@ -147,7 +138,7 @@ module SlidingSetTest {
             ensures  unchanged(this`ts)
             ensures unchanged(this`trueTs)
         {
-            // first just calculate pane and update timestamp.
+            // first just calculate pane and update last timestamp.
             pane := calcPane(ts);
             trueLastTs := trueTs;
             // next, insert into the appropriate pane.
@@ -164,34 +155,6 @@ module SlidingSetTest {
                 case 1 => {p2 := {};}
                 case 2 => {p3 := {};}
                 case 3 => {p0 := {};}
-            }
-        }
-
-        twostate predicate queryEffect (k : key)
-        reads this`pane
-        reads this`p0, this`p1, this`p2, this`p3
-        {
-            // this predicate should just express that 
-            // the appropriate pane is cleared and the others are unchanged.
-            match pane {
-                case 0 => p0 == old(p0) && p1 == {} && p2 == old(p2) && p3 == old(p3)
-                case 1 => p0 == old(p0) && p1 == old(p1) && p2 == {} && p3 == old(p3)
-                case 2 => p0 == old(p0) && p1 == old(p1) && p2 == old(p2) && p3 == {}
-                case 3 => p0 == {} && p1 == old(p1) && p2 == old(p2) && p3 == old(p3)
-            }
-        }
-
-        // The result of a query event
-        ghost predicate queryResult (k : key)
-        reads this`pane
-        reads this`p0, this`p1, this`p2, this`p3
-        {
-            // query returns true if the key is in the current pane or the previous pane.
-            match pane {
-                case 0 => (k in p0 || k in p3)
-                case 1 => (k in p1 || k in p0)
-                case 2 => (k in p2 || k in p1)
-                case 3 => (k in p3 || k in p2)
             }
         }
 
@@ -226,6 +189,51 @@ module SlidingSetTest {
                 case 3 => {p0 := {};}
             }            
         }
+
+
+        // An insert adds a key to the "inserting" pane 
+        // and also wipes the current "clearing" pane
+        twostate predicate insertEffect (k : key)
+        reads this`pane
+        reads this`p0, this`p1, this`p2, this`p3
+        {
+            match pane {
+                case 0 => p0 == old(p0) + {k} && p1 == {} && p2 == old(p2) && p3 == old(p3)
+                case 1 => p0 == old(p0) && p1 == old(p1) + {k} && p2 == {} && p3 == old(p3)
+                case 2 => p0 == old(p0) && p1 == old(p1) && p2 == old(p2) + {k} && p3 == {}
+                case 3 => p0 == {} && p1 == old(p1) && p2 == old(p2) && p3 == old(p3) + {k}
+            }
+        }
+
+        twostate predicate queryEffect (k : key)
+        reads this`pane
+        reads this`p0, this`p1, this`p2, this`p3
+        {
+            // this predicate should just express that 
+            // the appropriate pane is cleared and the others are unchanged.
+            match pane {
+                case 0 => p0 == old(p0) && p1 == {} && p2 == old(p2) && p3 == old(p3)
+                case 1 => p0 == old(p0) && p1 == old(p1) && p2 == {} && p3 == old(p3)
+                case 2 => p0 == old(p0) && p1 == old(p1) && p2 == old(p2) && p3 == {}
+                case 3 => p0 == {} && p1 == old(p1) && p2 == old(p2) && p3 == old(p3)
+            }
+        }
+
+        // The result of a query event
+        ghost predicate queryResult (k : key)
+        reads this`pane
+        reads this`p0, this`p1, this`p2, this`p3
+        {
+            // query returns true if the key is in the current pane or the previous pane.
+            match pane {
+                case 0 => (k in p0 || k in p3)
+                case 1 => (k in p1 || k in p0)
+                case 2 => (k in p2 || k in p1)
+                case 3 => (k in p3 || k in p2)
+            }
+        }
+
+
 
         // Advance clock simply moves the time forward.
         method advanceClock(delay : nat)
@@ -275,11 +283,9 @@ module SlidingSetTest {
                 && preserved(old(slidingSet.p2), slidingSet.p2)
         }
     }
-    /*
-        Inserting key k into the sliding set at time t, 
-        then performing 1 clear operation per time-unit until t', 
-        and finally querying the set for k at time t' such that t' < t + I, 
-        will return the key. */
+
+
+    // return a random nat from s to e, inclusive.
     method rand(s : nat, e : nat) returns (rv : nat)
         requires s <= e
         ensures s <= rv <= e
@@ -310,7 +316,7 @@ module SlidingSetTest {
         while (i < t') // and continues until t'
             invariant i <= t'
             invariant slidingSet.timeInvariant()
-            invariant slidingSet.trueTs == slidingSet.trueLastTs
+            invariant slidingSet.trueTs == slidingSet.trueLastTs        // we have just processed a packet
             invariant slidingSet.trueTs == i                            // the time is always set to i
             invariant slidingSet.trueTs - old@L(slidingSet.trueTs) < I  // the time is always within I of start
             
@@ -336,7 +342,7 @@ module SlidingSetTest {
             // increment the loop counter
             i := i + d;
         }
-        // increment clock once more -- this makes it at most I -- and then query the key.
+        // increment clock once more -- this makes trueTs at most I -- and then query the key.
         slidingSet.advanceClock(1);
         found := slidingSet.query(k);
     }
