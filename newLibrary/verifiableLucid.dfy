@@ -333,6 +333,29 @@ module Arr {
     // generic memcalc
     function  nocalc<t> (oldVal: t, newArg: t) : t {  oldVal  }
     function  swapcalc<t> (oldVal: t, newArg: t) : t {  newArg  }
+
+
+    // Create a vector of m arrays, each length n
+    // Can only be used in the constructor of the Lucid program, 
+    // because it allocates global memory
+    method CreateArrayVec<t>(n : nat, m : nat, init : t)
+        returns (rv : seq<LArray<t>>)
+        ensures |rv| == m        
+        ensures forall j | 0 <= j < |rv| :: rv[j].cells == seq(n, (_ => init))
+        ensures forall j | 0 <= j < |rv| :: fresh(rv[j])
+
+    {
+        rv := [];
+        for i := 0 to m
+            invariant |rv| == i
+            invariant (forall j | 0 <= j < |rv| :: rv[j].cells == seq(n, (_ => init)))
+            invariant forall j | 0 <= j < |rv| :: fresh(rv[j])
+
+        {
+            var next := new LArray.Create(n, init);
+            rv := rv + [next];
+        }
+    }
 }
 
 module Helpers {
