@@ -343,6 +343,7 @@ module Arr {
         ensures |rv| == m        
         ensures forall j | 0 <= j < |rv| :: rv[j].cells == seq(n, (_ => init))
         ensures forall j | 0 <= j < |rv| :: fresh(rv[j])
+        ensures fresh(rv)
         ensures forall j, k :: 0 <= j < |rv| && 0 <= k < |rv| && j != k ==> rv[j] != rv[k]
 
     {
@@ -362,6 +363,9 @@ module Arr {
 }
 
 module Helpers {
+    import opened LucidTypes
+    import opened Std.Arithmetic.Power
+
     datatype Opt<t> = 
     | None()
     | Some(v : t)
@@ -373,4 +377,32 @@ module Helpers {
     {
         return s;
     }
+    
+    method whatPow(seed : uint32, n : nat) 
+
+    {
+        LemmaPowPositive(2, n);
+        var p := Pow(2, n);
+        assert p >= 1;
+        var v := seed % p;        
+    }
+
+
+    // model of Lucid builtin to hash to a uint<n> -- n <= 32 because of switch HW limit
+    function hashn(n : nat, seed : nat, key : seq<nat>) : nat
+        requires 0 < n <= 32        
+        ensures hashn(n, seed, key) < Pow(2, n)
+    {
+        LemmaPowPositive(2, n);
+        hash_nat(seed, key) % Pow(2, n)
+    }
+
+    // Inner method for hash builtin
+    function {:fuel 16} hash_nat(seed : nat, key : seq<nat>) : nat
+    {
+        if |key| == 0
+            then seed
+            else key[0] + hash_nat(seed, key[1..])
+    }
+
 }
