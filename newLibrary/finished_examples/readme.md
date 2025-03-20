@@ -18,6 +18,12 @@
 
 #### Progress
 
-1, 2, 3, 4
+1, 2, 3, 4, 6
 
-(5 will take a while)
+- 5 (windowBloomFilter) will take a while
+- 7 (switchMLFill) will take a while
+
+
+Notes: 
+    We could really use external handlers or functions in switchMLSimple or some way to represent multicasting packets (generate_ports).
+        - All pretty straightforward to add.

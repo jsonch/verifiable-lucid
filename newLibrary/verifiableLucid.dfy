@@ -343,6 +343,7 @@ module Arr {
         ensures |rv| == m        
         ensures forall j | 0 <= j < |rv| :: rv[j].cells == seq(n, (_ => init))
         ensures forall j | 0 <= j < |rv| :: fresh(rv[j])
+        ensures forall j, k :: 0 <= j < |rv| && 0 <= k < |rv| && j != k ==> rv[j] != rv[k]
 
     {
         rv := [];
@@ -350,6 +351,7 @@ module Arr {
             invariant |rv| == i
             invariant (forall j | 0 <= j < |rv| :: rv[j].cells == seq(n, (_ => init)))
             invariant forall j | 0 <= j < |rv| :: fresh(rv[j])
+            invariant forall j, k :: 0 <= j < |rv| && 0 <= k < |rv| && j != k ==> rv[j] != rv[k]
 
         {
             var next := new LArray.Create(n, init);
