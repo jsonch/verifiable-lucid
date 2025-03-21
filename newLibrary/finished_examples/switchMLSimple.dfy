@@ -92,6 +92,9 @@ module BloomFilter refines VerifiableLucid {
         {
             var aggParams : paramList := seq(nParams, _ => 0);
             label LSTART:
+            // NOTE: 
+            // we might be able to use "forall" here to do parallel assignment. Since there are no dependencies
+            // between the parameter cells. That could make the invariants a lot simpler.
             for i := 0 to nParams
                 invariant ValidArrays ()
                 invariant 0 <= i <= nParams

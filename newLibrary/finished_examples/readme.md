@@ -18,7 +18,7 @@
 
 #### Progress
 
-1, 2, 3, 4, 6
+1, 2, 3, 4, 6, 8
 
 - 5 (windowBloomFilter) will take a while
 - 7 (switchMLFill) will take a while
